@@ -1,8 +1,8 @@
 #!/bin/bash
 # ==================================================
 # 服务器测试一键脚本
-# 版本：5.1 - 含快捷命令 sn
-# 功能：系统信息检测、性能测试、BBR管理、虚拟化检测、IPv6支持
+# 版本：5.3 - 最终稳定版
+# 功能：系统信息、性能测试、BBR管理、虚拟化检测、IPv6支持、外部测试
 # 快捷命令：安装后输入 sn 即可运行
 # ==================================================
 
@@ -11,42 +11,7 @@ YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 RED='\033[0;31m'
-PURPLE='\033[0;35m'
-CYAN='\033[0;36m'
 PLAIN='\033[0m'
-
-# --------------------------------------------------
-# 创建快捷命令 sn（第二次运行时直接输入 sn 即可）
-# --------------------------------------------------
-create_shortcut() {
-    local SCRIPT_PATH=""
-    
-    # 获取脚本真实路径
-    if [ -n "$BASH_SOURCE" ] && [ -f "$BASH_SOURCE" ]; then
-        SCRIPT_PATH=$(realpath "$BASH_SOURCE" 2>/dev/null)
-    fi
-    if [ -z "$SCRIPT_PATH" ]; then
-        SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null)
-    fi
-    if [ -z "$SCRIPT_PATH" ]; then
-        SCRIPT_PATH=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
-    fi
-    
-    # 创建快捷命令
-    if [ -f "$SCRIPT_PATH" ]; then
-        if [ ! -f /usr/local/bin/sn ]; then
-            ln -sf "$SCRIPT_PATH" /usr/local/bin/sn 2>/dev/null
-            if [ $? -eq 0 ]; then
-                echo -e "${GREEN}✓ 快捷命令已创建：输入 'sn' 即可运行本脚本${PLAIN}"
-            fi
-        fi
-        # 确保 sn 有执行权限
-        chmod +x /usr/local/bin/sn 2>/dev/null
-    fi
-}
-
-# 创建快捷命令
-create_shortcut
 
 # 设置环境变量 - 禁用所有交互式提示
 export DEBIAN_FRONTEND=noninteractive
@@ -62,8 +27,34 @@ START_TIME=$(date +%s)
 
 set +e
 
-# 全局标记文件
+# 全局标记文件（24小时内只更新一次软件源）
 APT_UPDATED_FLAG="/tmp/apt_updated_$(date +%Y%m%d)"
+
+# --------------------------------------------------
+# 创建快捷命令 sn（第二次运行直接输入 sn）
+# --------------------------------------------------
+create_shortcut() {
+    local SCRIPT_PATH=""
+    if [ -n "$BASH_SOURCE" ] && [ -f "$BASH_SOURCE" ]; then
+        SCRIPT_PATH=$(realpath "$BASH_SOURCE" 2>/dev/null)
+    fi
+    if [ -z "$SCRIPT_PATH" ]; then
+        SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null)
+    fi
+    if [ -z "$SCRIPT_PATH" ]; then
+        SCRIPT_PATH=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+    fi
+    if [ -f "$SCRIPT_PATH" ]; then
+        if [ ! -f /usr/local/bin/sn ]; then
+            ln -sf "$SCRIPT_PATH" /usr/local/bin/sn 2>/dev/null
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}✓ 快捷命令已创建：输入 'sn' 即可运行本脚本${PLAIN}"
+            fi
+        fi
+        chmod +x /usr/local/bin/sn 2>/dev/null
+    fi
+}
+create_shortcut
 
 # --------------------------------------------------
 # 0. 检测系统类型
@@ -102,7 +93,7 @@ echo -e "${GREEN}检测到系统: $OS_ID, 包管理器: $PKG_MANAGER${PLAIN}"
 echo ""
 
 # --------------------------------------------------
-# 1. 安装依赖（完全自动确认，智能跳过已安装）
+# 1. 安装依赖（智能跳过已安装，自动确认）
 # --------------------------------------------------
 echo -e "${YELLOW}正在检查并安装依赖包...${PLAIN}"
 echo ""
@@ -125,7 +116,6 @@ install_debian_deps() {
         sed -i 's/#$nrconf{restart} = '"'"'i'"'"';/$nrconf{restart} = '"'"'a'"'"';/g' /etc/needrestart/needrestart.conf 2>/dev/null
     fi
     
-    # 定义需要安装的包列表
     local packages=(
         iperf3 mtr sysbench tar curl bc wget git vim net-tools dnsutils 
         ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils 
@@ -133,12 +123,10 @@ install_debian_deps() {
         cmake python3 python3-pip speedtest-cli nload iftop
     )
     
-    # 检查是否已安装 build-essential
     if ! dpkg -l 2>/dev/null | grep -q "^ii  build-essential "; then
         packages+=(build-essential)
     fi
     
-    # 收集未安装的包
     local missing_pkgs=()
     for pkg in "${packages[@]}"; do
         if dpkg -l 2>/dev/null | grep -q "^ii  $pkg "; then
@@ -148,7 +136,6 @@ install_debian_deps() {
         fi
     done
     
-    # 批量安装未安装的包
     if [ ${#missing_pkgs[@]} -gt 0 ]; then
         echo -e "${BLUE}[正在安装] ${#missing_pkgs[@]} 个依赖包...${PLAIN}"
         DEBIAN_FRONTEND=noninteractive apt install -y -qq "${missing_pkgs[@]}" 2>/dev/null
@@ -161,7 +148,6 @@ install_debian_deps() {
 install_centos7_deps() {
     echo -e "${BLUE}[包管理器] 检测到 CentOS/RHEL 7 系统${PLAIN}"
     
-    # 检查 EPEL 是否已安装
     if ! rpm -q epel-release >/dev/null 2>&1; then
         echo -e "${BLUE}[包管理器] 正在启用 EPEL 源...${PLAIN}"
         rpm --import https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-7 2>/dev/null
@@ -248,18 +234,25 @@ case $PKG_MANAGER in
         ;;
 esac
 
-# 安装 nexttrace（用于路由测试）
-if ! command -v nexttrace &>/dev/null; then
-    echo -e "${BLUE}[正在安装] nexttrace 路由追踪工具...${PLAIN}"
-    wget -qO- https://raw.githubusercontent.com/sjlleo/nexttrace/main/install.sh 2>/dev/null | bash
-    echo -e "${GREEN}[完成] nexttrace${PLAIN}"
+# 强制安装 nexttrace（使用二进制下载，确保成功）
+echo -e "${BLUE}[正在安装] nexttrace 路由追踪工具...${PLAIN}"
+NEXTTRACE_URL="https://github.com/sjlleo/nexttrace/releases/latest/download/nexttrace_linux_amd64"
+wget -qO /usr/local/bin/nexttrace "$NEXTTRACE_URL" 2>/dev/null
+if [ -f /usr/local/bin/nexttrace ]; then
+    chmod +x /usr/local/bin/nexttrace
+    echo -e "${GREEN}[完成] nexttrace 安装成功${PLAIN}"
+else
+    # 备用安装方式
+    curl -sSL https://raw.githubusercontent.com/sjlleo/nexttrace/main/install.sh | bash 2>/dev/null
+    echo -e "${GREEN}[完成] nexttrace 安装完成${PLAIN}"
 fi
+export PATH=$PATH:/usr/local/bin
 
 echo -e "${GREEN}依赖包检查完成${PLAIN}"
 echo ""
 
 # --------------------------------------------------
-# 2. 设置主机名
+# 2. 设置主机名（修复：显示完整域名）
 # --------------------------------------------------
 CURRENT_HOSTNAME=$(hostname)
 EXPECTED_HOSTNAME="www.1373737.xyz"
@@ -275,7 +268,11 @@ else
     echo -e "${GREEN}主机名已经是 $EXPECTED_HOSTNAME${PLAIN}"
 fi
 
-HOSTNAME=$(hostname | cut -d'.' -f1)
+# 获取完整主机名（不再截断）
+FULL_HOSTNAME=$(hostname)
+if [[ "$FULL_HOSTNAME" != *"."* ]]; then
+    FULL_HOSTNAME=$(hostname -f 2>/dev/null || echo "$FULL_HOSTNAME")
+fi
 echo ""
 
 # --------------------------------------------------
@@ -411,14 +408,11 @@ TX_GB=$(echo "scale=2; $TX_BYTES/1024/1024/1024" | bc)
 TCP_ALGO=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
 [ -z "$TCP_ALGO" ] && TCP_ALGO="未知"
 
-IPV4=$(curl -s4m5 ifconfig.co 2>/dev/null || curl -s4m5 icanhazip.com 2>/dev/null || curl -s4m5 ipinfo.io/ip 2>/dev/null)
+IPV4=$(curl -s4m5 ifconfig.co 2>/dev/null || curl -s4m5 icanhazip.com 2>/dev/null)
 [ -z "$IPV4" ] && IPV4="未知"
 
-# IPv6 地址（静默获取）
 IPV6=$(curl -s6m5 ifconfig.co 2>/dev/null || curl -s6m5 icanhazip.com 2>/dev/null)
-if [ -z "$IPV6" ]; then
-    IPV6="未配置"
-fi
+[ -z "$IPV6" ] && IPV6="未配置"
 
 ISP=$(curl -s4m5 ipinfo.io/org 2>/dev/null | cut -d' ' -f2- | head -n1)
 GEO_CITY=$(curl -s4m5 ipinfo.io/city 2>/dev/null)
@@ -461,10 +455,6 @@ if command -v systemd-detect-virt &>/dev/null; then
         docker) VIRT_TYPE="Docker容器" ;;
         *) VIRT_TYPE="其他虚拟化" ;;
     esac
-elif [ -f /proc/cpuinfo ]; then
-    if grep -q "hypervisor" /proc/cpuinfo; then
-        VIRT_TYPE="虚拟化（未知类型）"
-    fi
 fi
 
 # --------------------------------------------------
@@ -530,8 +520,7 @@ fi
 IO_SPEEDS=()
 for i in {1..3}; do
     echo -e "${BLUE}硬盘测试第 $i/3 次...${PLAIN}"
-    # 使用 /dev/urandom 生成随机数据，避免缓存影响
-    dd if=/dev/urandom of=/tmp/test_io bs=1M count=256 oflag=direct 2>&1 | tee /tmp/dd_output
+    dd if=/dev/urandom of=/tmp/test_io bs=1M count=128 oflag=direct 2>&1 | tee /tmp/dd_output
     SPEED=$(grep -oP '\d+(\.\d+)? MB/s' /tmp/dd_output | head -1 | sed 's/ MB\/s//')
     if [ -n "$SPEED" ]; then
         IO_SPEEDS+=($SPEED)
@@ -543,7 +532,7 @@ for i in {1..3}; do
     rm -f /tmp/test_io /tmp/dd_output 2>/dev/null
     sync
     echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
-    sleep 2
+    sleep 1
 done
 
 AVG_SPEED=$(echo "scale=2; (${IO_SPEEDS[0]}+${IO_SPEEDS[1]}+${IO_SPEEDS[2]})/3" | bc 2>/dev/null)
@@ -565,7 +554,7 @@ fi
 echo ""
 echo -e "${YELLOW}系统信息查询${PLAIN}"
 echo "============================="
-echo "主机名： ${HOSTNAME}"
+echo "主机名： ${FULL_HOSTNAME}"
 echo "系统版本： ${OS_VERSION}"
 echo "Linux版本： ${KERNEL_VER}"
 echo "虚拟化类型： ${VIRT_TYPE}"
@@ -617,65 +606,68 @@ echo ""
 # 9. 执行外部测试脚本
 # --------------------------------------------------
 
-# 确保 nexttrace 已安装
-if ! command -v nexttrace &>/dev/null; then
-    echo -e "${YELLOW}正在安装 nexttrace 路由追踪工具...${PLAIN}"
-    wget -qO- https://raw.githubusercontent.com/sjlleo/nexttrace/main/install.sh | bash
-    echo -e "${GREEN}nexttrace 安装完成${PLAIN}"
-fi
-
 # 1. IP 风险检查
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[1/8] 执行 IP 风险检查...${PLAIN}"
-bash <(curl -Ls https://ipcheck.place) 2>/dev/null
+bash <(curl -sL --connect-timeout 15 https://ipcheck.place)
+echo -e "${GREEN}IP 风险检查完成${PLAIN}"
 echo ""
 
 # 2. 三网回程线路测试
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[2/8] 执行三网回程线路测试...${PLAIN}"
-curl https://raw.githubusercontent.com/zhanghanyun/backtrace/main/install.sh -sSf | sh
-curl https://raw.githubusercontent.com/anjing-liu/mtr_trace/main/mtr_trace.sh | bash
+curl -s --connect-timeout 15 https://raw.githubusercontent.com/zhanghanyun/backtrace/main/install.sh | sh
+curl -s --connect-timeout 15 https://raw.githubusercontent.com/anjing-liu/mtr_trace/main/mtr_trace.sh | bash
+echo -e "${GREEN}回程测试完成${PLAIN}"
 echo ""
 
 # 3. 三网+教育网 IPv4 单线程测速（自动选择2）
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[3/8] 执行三网+教育网 IPv4 单线程测速...${PLAIN}"
-echo "2" | bash <(curl -sL https://raw.githubusercontent.com/i-abc/Speedtest/main/speedtest.sh)
+echo "2" | bash <(curl -sL --connect-timeout 15 https://raw.githubusercontent.com/i-abc/Speedtest/main/speedtest.sh)
+echo -e "${GREEN}测速完成${PLAIN}"
 echo ""
 
 # 4. 流媒体解锁测试（自动回车）
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[4/8] 执行流媒体解锁测试...${PLAIN}"
-echo "" | bash <(curl -L -s https://check.unlock.media)
+echo "" | bash <(curl -sL --connect-timeout 15 https://check.unlock.media)
+echo -e "${GREEN}流媒体测试完成${PLAIN}"
 echo ""
 
 # 5. 全国五网ISP路由回程测试（先选1回车，再选8回车）
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[5/8] 执行全国五网ISP路由回程测试...${PLAIN}"
-{
-    echo "1"
-    sleep 1
-    echo "8"
-} | nexttrace --fast-trace
+if command -v nexttrace &>/dev/null; then
+    { echo "1"; sleep 1; echo "8"; } | nexttrace --fast-trace
+elif [ -f /usr/local/bin/nexttrace ]; then
+    { echo "1"; sleep 1; echo "8"; } | /usr/local/bin/nexttrace --fast-trace
+else
+    echo -e "${YELLOW}nexttrace 未安装，跳过路由测试${PLAIN}"
+fi
+echo -e "${GREEN}路由测试完成${PLAIN}"
 echo ""
 
 # 6. 三网回程路由测试
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[6/8] 执行三网回程路由测试...${PLAIN}"
-bash <(curl -Ls https://netcheck.place) -R
+bash <(curl -sL --connect-timeout 15 https://netcheck.place) -R
+echo -e "${GREEN}回程路由测试完成${PLAIN}"
 echo ""
 
 # 7. bench 性能测试
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[7/8] 执行 bench 性能测试...${PLAIN}"
-wget -qO- bench.sh | bash
+wget -qO- --timeout=30 bench.sh | bash
+echo -e "${GREEN}bench测试完成${PLAIN}"
 echo ""
 
 # 8. 超售测试
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[8/8] 执行超售测试...${PLAIN}"
-wget --no-check-certificate -O memoryCheck.sh https://raw.githubusercontent.com/uselibrary/memoryCheck/main/memoryCheck.sh && chmod +x memoryCheck.sh && bash memoryCheck.sh
+wget --timeout=30 --no-check-certificate -O memoryCheck.sh https://raw.githubusercontent.com/uselibrary/memoryCheck/main/memoryCheck.sh && chmod +x memoryCheck.sh && bash memoryCheck.sh
 rm -f memoryCheck.sh
+echo -e "${GREEN}超售测试完成${PLAIN}"
 echo ""
 
 # --------------------------------------------------
