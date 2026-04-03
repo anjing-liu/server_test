@@ -14,7 +14,7 @@ RED='\033[0;31m'
 PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 PLAIN='\033[0m'
-
+export DEBIAN_FRONTEND=noninteractive
 # 开始计时
 START_TIME=$(date +%s)
 
