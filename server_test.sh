@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==================================================
 # 服务器测试一键脚本
-# 版本：4.4 - 增强稳定版
+# 版本：4.5 - 最终修复版
 # ==================================================
 
 # 颜色定义
@@ -24,6 +24,9 @@ START_TIME=$(date +%s)
 [[ $EUID -ne 0 ]] && echo -e "${RED}错误：请使用 root 用户运行此脚本${PLAIN}" && exit 1
 
 set +e
+
+# 全局标记文件
+APT_UPDATED_FLAG="/tmp/apt_updated_$(date +%Y%m%d)"
 
 # --------------------------------------------------
 # 0. 检测系统类型
@@ -62,90 +65,130 @@ echo -e "${GREEN}检测到系统: $OS_ID, 包管理器: $PKG_MANAGER${PLAIN}"
 echo ""
 
 # --------------------------------------------------
-# 1. 安装依赖（完全自动确认，无交互弹窗）
+# 1. 安装依赖
 # --------------------------------------------------
 echo -e "${YELLOW}正在检查并安装依赖包...${PLAIN}"
 echo ""
 
 install_debian_deps() {
     echo -e "${BLUE}[包管理器] 检测到 Debian/Ubuntu 系统${PLAIN}"
-    echo -e "${BLUE}[包管理器] 正在更新软件源...${PLAIN}"
     
-    apt update -y -qq 2>/dev/null
-    echo -e "${GREEN}[包管理器] 软件源更新完成${PLAIN}"
+    if [ ! -f "$APT_UPDATED_FLAG" ]; then
+        echo -e "${BLUE}[包管理器] 正在更新软件源...${PLAIN}"
+        apt update -y -qq 2>/dev/null
+        touch "$APT_UPDATED_FLAG"
+        echo -e "${GREEN}[包管理器] 软件源更新完成${PLAIN}"
+    else
+        echo -e "${GREEN}[包管理器] 软件源已是最新，跳过更新${PLAIN}"
+    fi
     
     # 防止内核升级弹窗
     if [ -f /etc/needrestart/needrestart.conf ]; then
         sed -i 's/#$nrconf{restart} = '"'"'i'"'"';/$nrconf{restart} = '"'"'a'"'"';/g' /etc/needrestart/needrestart.conf 2>/dev/null
-        echo '$nrconf{restart} = "a";' >> /etc/needrestart/needrestart.conf 2>/dev/null
     fi
     
-    # 创建 policy-rc.d 防止服务自动启动
-    if [ ! -f /usr/sbin/policy-rc.d ]; then
-        echo '#!/bin/sh' > /usr/sbin/policy-rc.d
-        echo 'exit 101' >> /usr/sbin/policy-rc.d
-        chmod +x /usr/sbin/policy-rc.d
+    local packages=(
+        iperf3 mtr sysbench tar curl bc wget git vim net-tools dnsutils 
+        ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils 
+        ioping fio zip unzip bzip2 screen tmux jq tree 
+        cmake python3 python3-pip speedtest-cli nload iftop
+    )
+    
+    # 检查是否已安装 build-essential
+    if ! dpkg -l 2>/dev/null | grep -q "^ii  build-essential "; then
+        packages+=(build-essential)
     fi
     
-    for pkg in iperf3 mtr sysbench tar curl bc wget git vim net-tools dnsutils ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils ioping fio zip unzip bzip2 screen tmux jq tree build-essential cmake python3 python3-pip speedtest-cli nload iftop; do
+    local missing_pkgs=()
+    for pkg in "${packages[@]}"; do
         if dpkg -l 2>/dev/null | grep -q "^ii  $pkg "; then
             echo -e "${GREEN}[已安装] $pkg${PLAIN}"
         else
-            echo -e "${BLUE}[正在安装] $pkg ...${PLAIN}"
-            DEBIAN_FRONTEND=noninteractive \
-            DEBCONF_NONINTERACTIVE_SEEN=true \
-            UCF_FORCE_CONFFNEW=true \
-            UCF_FORCE_CONFFMISS=true \
-            apt install -y \
-                -o Dpkg::Options::="--force-confdef" \
-                -o Dpkg::Options::="--force-confold" \
-                -qq $pkg 2>/dev/null
-            echo -e "${GREEN}[完成] $pkg${PLAIN}"
+            missing_pkgs+=("$pkg")
         fi
     done
     
-    # 安装 silversearcher-ag
-    if ! dpkg -l | grep -q "silversearcher-ag"; then
-        DEBIAN_FRONTEND=noninteractive apt install -y silversearcher-ag 2>/dev/null
+    if [ ${#missing_pkgs[@]} -gt 0 ]; then
+        echo -e "${BLUE}[正在安装] ${#missing_pkgs[@]} 个依赖包...${PLAIN}"
+        DEBIAN_FRONTEND=noninteractive apt install -y -qq "${missing_pkgs[@]}" 2>/dev/null
+        echo -e "${GREEN}[完成] 依赖包安装完成${PLAIN}"
+    else
+        echo -e "${GREEN}[完成] 所有依赖包已安装${PLAIN}"
     fi
-    
-    rm -f /usr/sbin/policy-rc.d 2>/dev/null
 }
 
 install_centos7_deps() {
     echo -e "${BLUE}[包管理器] 检测到 CentOS/RHEL 7 系统${PLAIN}"
-    echo -e "${BLUE}[包管理器] 正在启用 EPEL 源...${PLAIN}"
     
-    rpm --import https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-7 2>/dev/null
-    yum install -y epel-release 2>/dev/null
+    if ! rpm -q epel-release >/dev/null 2>&1; then
+        echo -e "${BLUE}[包管理器] 正在启用 EPEL 源...${PLAIN}"
+        rpm --import https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-7 2>/dev/null
+        yum install -y epel-release 2>/dev/null
+        echo -e "${GREEN}[包管理器] EPEL 源启用完成${PLAIN}"
+    else
+        echo -e "${GREEN}[包管理器] EPEL 源已启用${PLAIN}"
+    fi
     
-    for pkg in iperf3 mtr sysbench tar curl bc wget git vim net-tools bind-utils ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils ioping fio zip unzip bzip2 screen tmux jq tree gcc gcc-c++ make cmake python3 python3-pip speedtest-cli nload iftop; do
+    local packages=(
+        iperf3 mtr sysbench tar curl bc wget git vim net-tools bind-utils
+        ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils
+        ioping fio zip unzip bzip2 screen tmux jq tree
+        gcc gcc-c++ make cmake python3 python3-pip speedtest-cli nload iftop
+    )
+    
+    local missing_pkgs=()
+    for pkg in "${packages[@]}"; do
         if rpm -q $pkg >/dev/null 2>&1; then
             echo -e "${GREEN}[已安装] $pkg${PLAIN}"
         else
-            echo -e "${BLUE}[正在安装] $pkg ...${PLAIN}"
-            yum install -y $pkg 2>/dev/null
-            echo -e "${GREEN}[完成] $pkg${PLAIN}"
+            missing_pkgs+=("$pkg")
         fi
     done
+    
+    if [ ${#missing_pkgs[@]} -gt 0 ]; then
+        echo -e "${BLUE}[正在安装] ${#missing_pkgs[@]} 个依赖包...${PLAIN}"
+        yum install -y "${missing_pkgs[@]}" 2>/dev/null
+        echo -e "${GREEN}[完成] 依赖包安装完成${PLAIN}"
+    else
+        echo -e "${GREEN}[完成] 所有依赖包已安装${PLAIN}"
+    fi
 }
 
 install_centos8_deps() {
     echo -e "${BLUE}[包管理器] 检测到 CentOS/RHEL 8+ 系统${PLAIN}"
-    echo -e "${BLUE}[包管理器] 正在启用 EPEL 源...${PLAIN}"
     
-    rpm --import https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-8 2>/dev/null
-    dnf install -y epel-release 2>/dev/null
+    if ! rpm -q epel-release >/dev/null 2>&1; then
+        echo -e "${BLUE}[包管理器] 正在启用 EPEL 源...${PLAIN}"
+        rpm --import https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-8 2>/dev/null
+        dnf install -y epel-release 2>/dev/null
+        echo -e "${GREEN}[包管理器] EPEL 源启用完成${PLAIN}"
+    else
+        echo -e "${GREEN}[包管理器] EPEL 源已启用${PLAIN}"
+    fi
     
-    for pkg in iperf3 mtr sysbench tar curl bc wget git vim net-tools bind-utils ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils ioping fio zip unzip bzip2 screen tmux jq tree gcc gcc-c++ make cmake python3 python3-pip speedtest-cli nload iftop; do
+    local packages=(
+        iperf3 mtr sysbench tar curl bc wget git vim net-tools bind-utils
+        ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils
+        ioping fio zip unzip bzip2 screen tmux jq tree
+        gcc gcc-c++ make cmake python3 python3-pip speedtest-cli nload iftop
+    )
+    
+    local missing_pkgs=()
+    for pkg in "${packages[@]}"; do
         if rpm -q $pkg >/dev/null 2>&1; then
             echo -e "${GREEN}[已安装] $pkg${PLAIN}"
         else
-            echo -e "${BLUE}[正在安装] $pkg ...${PLAIN}"
-            dnf install -y $pkg 2>/dev/null
-            echo -e "${GREEN}[完成] $pkg${PLAIN}"
+            missing_pkgs+=("$pkg")
         fi
     done
+    
+    if [ ${#missing_pkgs[@]} -gt 0 ]; then
+        echo -e "${BLUE}[正在安装] ${#missing_pkgs[@]} 个依赖包...${PLAIN}"
+        dnf install -y "${missing_pkgs[@]}" 2>/dev/null
+        echo -e "${GREEN}[完成] 依赖包安装完成${PLAIN}"
+    else
+        echo -e "${GREEN}[完成] 所有依赖包已安装${PLAIN}"
+    fi
 }
 
 case $PKG_MANAGER in
@@ -262,41 +305,34 @@ else
 fi
 [ -z "$CPU_MODEL" ] && CPU_MODEL="未知"
 
-# CPU 核心数
 CPU_CORES=$(nproc)
 [ -z "$CPU_CORES" ] && CPU_CORES=1
 
 # CPU 频率（多级降级获取）
 CPU_FREQ=""
-# 方法1：lscpu
 if command -v lscpu &>/dev/null; then
     CPU_FREQ=$(lscpu 2>/dev/null | grep "CPU MHz" | awk -F':' '{print $2}' | xargs | cut -d'.' -f1)
     [ -z "$CPU_FREQ" ] && CPU_FREQ=$(lscpu 2>/dev/null | grep "CPU动态频率" | awk -F':' '{print $2}' | xargs | cut -d'.' -f1)
     [ -z "$CPU_FREQ" ] && CPU_FREQ=$(lscpu 2>/dev/null | grep "CPU max MHz" | awk -F':' '{print $2}' | xargs | cut -d'.' -f1)
 fi
-# 方法2：/proc/cpuinfo
 if [ -z "$CPU_FREQ" ]; then
     CPU_FREQ=$(cat /proc/cpuinfo 2>/dev/null | grep "cpu MHz" | head -1 | awk -F':' '{print $2}' | xargs | cut -d'.' -f1)
 fi
-# 方法3：sysfs
 if [ -z "$CPU_FREQ" ] && [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq ]; then
     CPU_FREQ=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev/null)
     [ -n "$CPU_FREQ" ] && CPU_FREQ=$((CPU_FREQ / 1000))
 fi
 [ -z "$CPU_FREQ" ] && CPU_FREQ="未知"
 
-# CPU 占用
 CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
 if [ -z "$CPU_USAGE" ]; then
     CPU_USAGE=$(top -bn1 | grep "%Cpu" | awk '{print $2}')
 fi
 [ -z "$CPU_USAGE" ] && CPU_USAGE=0
 
-# 系统负载
 LOAD_AVG=$(cat /proc/loadavg 2>/dev/null | awk '{print $1", "$2", "$3}')
 [ -z "$LOAD_AVG" ] && LOAD_AVG="0, 0, 0"
 
-# 内存信息
 MEM_TOTAL=$(free -m | awk '/^Mem:/{print $2}')
 MEM_USED=$(free -m | awk '/^Mem:/{print $3}')
 MEM_PERCENT=$(echo "scale=2; $MEM_USED*100/$MEM_TOTAL" | bc)
@@ -311,7 +347,6 @@ else
     SWAP_INFO="${SWAP_USED}.00/${SWAP_TOTAL}.00 MB (${SWAP_PERCENT}%)"
 fi
 
-# 硬盘信息
 DISK_TOTAL=$(df -BG / | awk 'NR==2{print $2}' | sed 's/G//')
 DISK_USED=$(df -BG / | awk 'NR==2{print $3}' | sed 's/G//')
 DISK_PERCENT=$(df -h / | awk 'NR==2{print $5}' | sed 's/%//')
@@ -331,19 +366,18 @@ TX_GB=$(echo "scale=2; $TX_BYTES/1024/1024/1024" | bc)
 [ -z "$RX_GB" ] && RX_GB=0
 [ -z "$TX_GB" ] && TX_GB=0
 
-# 网络算法
 TCP_ALGO=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
 [ -z "$TCP_ALGO" ] && TCP_ALGO="未知"
 
-# IPv4 地址
 IPV4=$(curl -s4m5 ifconfig.co 2>/dev/null || curl -s4m5 icanhazip.com 2>/dev/null || curl -s4m5 ipinfo.io/ip 2>/dev/null)
 [ -z "$IPV4" ] && IPV4="未知"
 
-# IPv6 地址
+# IPv6 地址（静默获取，不显示错误）
 IPV6=$(curl -s6m5 ifconfig.co 2>/dev/null || curl -s6m5 icanhazip.com 2>/dev/null)
-[ -z "$IPV6" ] && IPV6="未配置"
+if [ -z "$IPV6" ]; then
+    IPV6="未配置"
+fi
 
-# 运营商和地理位置
 ISP=$(curl -s4m5 ipinfo.io/org 2>/dev/null | cut -d' ' -f2- | head -n1)
 GEO_CITY=$(curl -s4m5 ipinfo.io/city 2>/dev/null)
 GEO_COUNTRY=$(curl -s4m5 ipinfo.io/country 2>/dev/null)
@@ -352,16 +386,13 @@ GEO_COUNTRY=$(curl -s4m5 ipinfo.io/country 2>/dev/null)
 [ -z "$GEO_COUNTRY" ] && GEO_COUNTRY="Unknown"
 GEO="${GEO_CITY}, ${GEO_COUNTRY}"
 
-# DNS 地址
 DNS1=$(grep -m1 nameserver /etc/resolv.conf 2>/dev/null | awk '{print $2}')
 DNS2=$(grep -m2 nameserver /etc/resolv.conf 2>/dev/null | tail -n1 | awk '{print $2}')
 [ -z "$DNS1" ] && DNS1="未知"
 [ -z "$DNS2" ] && DNS2="无"
 
-# 系统时间
 CURRENT_TIME=$(TZ='Asia/Shanghai' date "+%Y-%m-%d %H:%M %p" 2>/dev/null)
 
-# 运行时长
 UPTIME_SEC=$(cat /proc/uptime 2>/dev/null | awk '{print $1}')
 if [ -n "$UPTIME_SEC" ]; then
     DAYS=$(echo "$UPTIME_SEC/86400" | bc)
@@ -395,7 +426,7 @@ elif [ -f /proc/cpuinfo ]; then
 fi
 
 # --------------------------------------------------
-# 6. 性能基准测试（带实时进度）
+# 6. 性能基准测试
 # --------------------------------------------------
 echo -e "${BLUE}正在进行 CPU 性能测试（单核）...${PLAIN}"
 echo -e "${YELLOW}→ 正在密集计算素数，CPU 将满载 10 秒...${PLAIN}"
@@ -421,7 +452,7 @@ echo ""
 
 echo -e "${BLUE}正在进行内存读测试...${PLAIN}"
 echo -e "${YELLOW}→ 正在读取 5GB 内存数据...${PLAIN}"
-MEM_READ=$(sysbench memory --memory-block-size=1M --memory-total-size=5G --memory-oper=read --time=10 run 2>&1 | grep "transferred" | awk '{print $4}' | head -1)
+MEM_READ=$(sysbench memory --memory-block-size=1M --memory-total-size=5G --memory-oper=read --time=10 run 2>&1 | grep "transferred" | awk '{print $4}' | head -1 | sed 's/(//g')
 if [ -n "$MEM_READ" ] && [ "$MEM_READ" != "0" ]; then
     echo -e "${GREEN}✓ 内存读测试完成，速度: ${MEM_READ} MB/s${PLAIN}"
 else
@@ -432,7 +463,7 @@ echo ""
 
 echo -e "${BLUE}正在进行内存写测试...${PLAIN}"
 echo -e "${YELLOW}→ 正在写入 5GB 内存数据...${PLAIN}"
-MEM_WRITE=$(sysbench memory --memory-block-size=1M --memory-total-size=5G --memory-oper=write --time=10 run 2>&1 | grep "transferred" | awk '{print $4}' | head -1)
+MEM_WRITE=$(sysbench memory --memory-block-size=1M --memory-total-size=5G --memory-oper=write --time=10 run 2>&1 | grep "transferred" | awk '{print $4}' | head -1 | sed 's/(//g')
 if [ -n "$MEM_WRITE" ] && [ "$MEM_WRITE" != "0" ]; then
     echo -e "${GREEN}✓ 内存写测试完成，速度: ${MEM_WRITE} MB/s${PLAIN}"
 else
@@ -442,7 +473,7 @@ fi
 echo ""
 
 # --------------------------------------------------
-# 7. 硬盘 I/O 性能测试
+# 7. 硬盘 I/O 性能测试（使用随机数据避免缓存）
 # --------------------------------------------------
 echo -e "${BLUE}正在进行硬盘 I/O 性能测试...${PLAIN}"
 ROTATIONAL=$(cat /sys/block/$(lsblk -no pkname $(df / | tail -1 | cut -d' ' -f1) 2>/dev/null | head -1)/queue/rotational 2>/dev/null)
@@ -457,7 +488,8 @@ fi
 IO_SPEEDS=()
 for i in {1..3}; do
     echo -e "${BLUE}硬盘测试第 $i/3 次...${PLAIN}"
-    dd if=/dev/zero of=/tmp/test_io bs=1M count=512 oflag=direct 2>&1 | tee /tmp/dd_output
+    # 使用 /dev/urandom 生成随机数据，避免缓存影响
+    dd if=/dev/urandom of=/tmp/test_io bs=1M count=256 oflag=direct 2>&1 | tee /tmp/dd_output
     SPEED=$(grep -oP '\d+(\.\d+)? MB/s' /tmp/dd_output | head -1 | sed 's/ MB\/s//')
     if [ -n "$SPEED" ]; then
         IO_SPEEDS+=($SPEED)
@@ -467,7 +499,9 @@ for i in {1..3}; do
         echo -e "${YELLOW}第 $i 次测试失败${PLAIN}"
     fi
     rm -f /tmp/test_io /tmp/dd_output 2>/dev/null
-    sleep 1
+    sync
+    echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+    sleep 2
 done
 
 AVG_SPEED=$(echo "scale=2; (${IO_SPEEDS[0]}+${IO_SPEEDS[1]}+${IO_SPEEDS[2]})/3" | bc 2>/dev/null)
@@ -484,7 +518,7 @@ else
 fi
 
 # --------------------------------------------------
-# 8. 输出系统信息（紧凑格式）
+# 8. 输出系统信息
 # --------------------------------------------------
 echo ""
 echo -e "${YELLOW}系统信息查询${PLAIN}"
@@ -527,7 +561,6 @@ echo "============================="
 echo "系统运行时长： ${UPTIME_STR}"
 echo ""
 echo -e "${YELLOW}硬盘 I/O 性能测试${PLAIN}"
-echo "硬盘性能测试正在进行中..."
 echo "硬盘性能测试结果如下："
 echo -e "硬盘I/O（第一次测试）： ${YELLOW}${IO_SPEEDS[0]} MB/s${PLAIN}"
 echo -e "硬盘I/O（第二次测试）： ${YELLOW}${IO_SPEEDS[1]} MB/s${PLAIN}"
@@ -539,39 +572,45 @@ echo -e "${GREEN}测试数据不是百分百准确，以官方宣称为主。${P
 echo ""
 
 # --------------------------------------------------
-# 9. 执行外部测试脚本
+# 9. 执行外部测试脚本（确保有输出）
 # --------------------------------------------------
 echo -e "${BLUE}执行 IP 风险检查...${PLAIN}"
-curl -s --connect-timeout 10 https://ipcheck.place 2>/dev/null | bash || echo "IP风险检查跳过"
+curl -s --connect-timeout 15 https://ipcheck.place 2>/dev/null | bash
+if [ $? -ne 0 ]; then
+    echo -e "${YELLOW}IP 风险检查暂时不可用，跳过${PLAIN}"
+fi
 echo ""
 
 echo -e "${BLUE}执行三网回程线路测试...${PLAIN}"
-curl -s --connect-timeout 10 https://raw.githubusercontent.com/zhanghanyun/backtrace/main/install.sh 2>/dev/null | sh || echo "回程测试跳过"
-curl -s --connect-timeout 10 https://raw.githubusercontent.com/anjing-liu/mtr_trace/main/mtr_trace.sh 2>/dev/null | bash || echo "MTR测试跳过"
+curl -s --connect-timeout 15 https://raw.githubusercontent.com/zhanghanyun/backtrace/main/install.sh 2>/dev/null | sh
+if [ $? -ne 0 ]; then
+    echo -e "${YELLOW}回程测试暂时不可用，跳过${PLAIN}"
+fi
+curl -s --connect-timeout 15 https://raw.githubusercontent.com/anjing-liu/mtr_trace/main/mtr_trace.sh 2>/dev/null | bash
 echo ""
 
 echo -e "${BLUE}执行三网+教育网 IPv4 单线程测速...${PLAIN}"
-echo "2" | bash <(curl -sL --connect-timeout 10 https://raw.githubusercontent.com/i-abc/Speedtest/main/speedtest.sh) 2>/dev/null || echo "测速跳过"
+echo "2" | bash <(curl -sL --connect-timeout 15 https://raw.githubusercontent.com/i-abc/Speedtest/main/speedtest.sh) 2>/dev/null
 echo ""
 
 echo -e "${BLUE}执行流媒体解锁测试...${PLAIN}"
-echo "" | bash <(curl -L -s --connect-timeout 10 https://check.unlock.media) 2>/dev/null || echo "流媒体测试跳过"
+echo "" | bash <(curl -L -s --connect-timeout 15 https://check.unlock.media) 2>/dev/null
 echo ""
 
 echo -e "${BLUE}执行全国五网ISP路由回程测试...${PLAIN}"
-printf "1\n8\n" | nexttrace --fast-trace 2>/dev/null || echo "路由测试跳过"
+printf "1\n8\n" | nexttrace --fast-trace 2>/dev/null
 echo ""
 
 echo -e "${BLUE}执行三网回程路由测试...${PLAIN}"
-bash <(curl -Ls --connect-timeout 10 https://netcheck.place) -R 2>/dev/null || echo "路由测试跳过"
+bash <(curl -Ls --connect-timeout 15 https://netcheck.place) -R 2>/dev/null
 echo ""
 
 echo -e "${BLUE}执行 bench 性能测试...${PLAIN}"
-wget -qO- --timeout=30 bench.sh 2>/dev/null | bash || echo "bench测试跳过"
+wget -qO- --timeout=30 bench.sh 2>/dev/null | bash
 echo ""
 
 echo -e "${BLUE}执行超售测试...${PLAIN}"
-wget --timeout=30 --no-check-certificate -O memoryCheck.sh https://raw.githubusercontent.com/uselibrary/memoryCheck/main/memoryCheck.sh 2>/dev/null && chmod +x memoryCheck.sh && bash memoryCheck.sh 2>/dev/null || echo "超售测试跳过"
+wget --timeout=30 --no-check-certificate -O memoryCheck.sh https://raw.githubusercontent.com/uselibrary/memoryCheck/main/memoryCheck.sh 2>/dev/null && chmod +x memoryCheck.sh && bash memoryCheck.sh 2>/dev/null
 rm -f memoryCheck.sh 2>/dev/null
 echo ""
 
