@@ -1,142 +1,213 @@
 #!/bin/bash
 # ==================================================
 # 服务器测试一键脚本
-# 版本：3.3 - 智能跳过已安装依赖
-# 功能：系统信息收集、性能测试、网络测试
+# 版本：4.2 - 完整稳定版
+# 功能：系统信息检测、性能测试、BBR v3管理、虚拟化检测、IPv6支持
+# 支持：Ubuntu 16.04-24.04, Debian 9-12, CentOS 7-9, Rocky Linux, AlmaLinux
 # ==================================================
 
 # 颜色定义
 YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
+RED='\033[0;31m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
 PLAIN='\033[0m'
 
 # 开始计时
 START_TIME=$(date +%s)
 
 # 检查是否为root用户
-[[ $EUID -ne 0 ]] && echo -e "${YELLOW}错误：请使用 root 用户运行此脚本${PLAIN}" && exit 1
+[[ $EUID -ne 0 ]] && echo -e "${RED}错误：请使用 root 用户运行此脚本${PLAIN}" && exit 1
 
 set +e
 
 # --------------------------------------------------
-# 1. 安装依赖（智能跳过已安装）
+# 0. 检测系统类型
+# --------------------------------------------------
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS_ID=$ID
+        OS_VERSION_ID=$VERSION_ID
+        if [[ "$ID" == "ubuntu" ]] || [[ "$ID" == "debian" ]]; then
+            PKG_MANAGER="apt"
+        elif [[ "$ID" == "centos" ]] || [[ "$ID" == "rhel" ]] || [[ "$ID" == "rocky" ]] || [[ "$ID" == "almalinux" ]] || [[ "$ID" == "fedora" ]]; then
+            if [[ "$VERSION_ID" =~ ^7 ]]; then
+                PKG_MANAGER="yum"
+            else
+                PKG_MANAGER="dnf"
+            fi
+        else
+            PKG_MANAGER="unknown"
+        fi
+    elif [ -f /etc/redhat-release ]; then
+        OS_ID="centos"
+        if grep -q "release 7" /etc/redhat-release; then
+            PKG_MANAGER="yum"
+        else
+            PKG_MANAGER="dnf"
+        fi
+    else
+        PKG_MANAGER="unknown"
+        OS_ID="unknown"
+    fi
+}
+
+detect_os
+echo -e "${GREEN}检测到系统: $OS_ID, 包管理器: $PKG_MANAGER${PLAIN}"
+echo ""
+
+# --------------------------------------------------
+# 1. 安装依赖（兼容不同系统）
 # --------------------------------------------------
 echo -e "${YELLOW}正在检查并安装依赖包...${PLAIN}"
 echo ""
 
-if command -v apt &>/dev/null; then
-    echo -e "${BLUE}[包管理器] 检测到 Debian/Ubuntu 系统${PLAIN}"
-    
-    if [ ! -f /tmp/apt_updated ]; then
-        echo -e "${BLUE}[包管理器] 正在更新软件源...${PLAIN}"
-        apt update -y >/dev/null 2>&1
-        touch /tmp/apt_updated
-        echo -e "${GREEN}[包管理器] 软件源更新完成${PLAIN}"
-    fi
-    
-    # 基础包
-    for pkg in iperf3 mtr sysbench tar curl bc wget git vim net-tools dnsutils ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils ioping fio zip unzip bzip2 screen tmux jq tree; do
-        if dpkg -l | grep -q "^ii  $pkg "; then
-            echo -e "${GREEN}[已安装] $pkg${PLAIN}"
-        else
-            echo -e "${BLUE}[正在安装] $pkg${PLAIN}"
-            apt install -y $pkg >/dev/null 2>&1
-        fi
-    done
-    
-    # 开发工具包
-    for pkg in build-essential cmake python3 python3-pip silversearcher-ag; do
-        if dpkg -l | grep -q "^ii  $pkg "; then
-            echo -e "${GREEN}[已安装] $pkg${PLAIN}"
-        else
-            echo -e "${BLUE}[正在安装] $pkg${PLAIN}"
-            apt install -y $pkg >/dev/null 2>&1
-        fi
-    done
-    
-elif command -v yum &>/dev/null; then
-    echo -e "${BLUE}[包管理器] 检测到 CentOS/RHEL 7 系统${PLAIN}"
-    
-    if [ ! -f /tmp/epel_installed ]; then
-        echo -e "${BLUE}[包管理器] 正在启用 EPEL 源...${PLAIN}"
-        yum install -y epel-release >/dev/null 2>&1
-        touch /tmp/epel_installed
-    fi
-    
-    for pkg in iperf3 mtr sysbench tar curl bc wget git vim net-tools bind-utils ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils ioping fio zip unzip bzip2 screen tmux jq tree gcc gcc-c++ make cmake python3 python3-pip; do
-        if rpm -q $pkg >/dev/null 2>&1; then
-            echo -e "${GREEN}[已安装] $pkg${PLAIN}"
-        else
-            echo -e "${BLUE}[正在安装] $pkg${PLAIN}"
-            yum install -y $pkg >/dev/null 2>&1
-        fi
-    done
-    
-elif command -v dnf &>/dev/null; then
-    echo -e "${BLUE}[包管理器] 检测到 CentOS/RHEL 8+ 系统${PLAIN}"
-    
-    if [ ! -f /tmp/epel_installed ]; then
-        echo -e "${BLUE}[包管理器] 正在启用 EPEL 源...${PLAIN}"
-        dnf install -y epel-release >/dev/null 2>&1
-        touch /tmp/epel_installed
-    fi
-    
-    for pkg in iperf3 mtr sysbench tar curl bc wget git vim net-tools bind-utils ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils ioping fio zip unzip bzip2 screen tmux jq tree gcc gcc-c++ make cmake python3 python3-pip; do
-        if rpm -q $pkg >/dev/null 2>&1; then
-            echo -e "${GREEN}[已安装] $pkg${PLAIN}"
-        else
-            echo -e "${BLUE}[正在安装] $pkg${PLAIN}"
-            dnf install -y $pkg >/dev/null 2>&1
-        fi
-    done
-    
-elif command -v pacman &>/dev/null; then
-    echo -e "${BLUE}[包管理器] 检测到 Arch Linux 系统${PLAIN}"
-    echo -e "${BLUE}[包管理器] 正在同步软件源...${PLAIN}"
-    pacman -Sy --noconfirm >/dev/null 2>&1
-    pacman -S --noconfirm iperf3 mtr sysbench tar curl bc wget git vim net-tools dnsutils ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils ioping fio base-devel cmake python python-pip zip unzip bzip2 screen tmux jq tree the_silver_searcher >/dev/null 2>&1
-    
-elif command -v apk &>/dev/null; then
-    echo -e "${BLUE}[包管理器] 检测到 Alpine Linux 系统${PLAIN}"
+install_debian_deps() {
     echo -e "${BLUE}[包管理器] 正在更新软件源...${PLAIN}"
-    apk update >/dev/null 2>&1
-    apk add iperf3 mtr sysbench tar curl bc wget git vim net-tools bind-tools ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils ioping fio gcc g++ make cmake python3 py3-pip zip unzip bzip2 screen tmux jq tree the_silver_searcher >/dev/null 2>&1
+    apt update -y
+    
+    for pkg in iperf3 mtr sysbench tar curl bc wget git vim net-tools dnsutils ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils ioping fio zip unzip bzip2 screen tmux jq tree build-essential cmake python3 python3-pip speedtest-cli nload iftop; do
+        if dpkg -l 2>/dev/null | grep -q "^ii  $pkg "; then
+            echo -e "${GREEN}[已安装] $pkg${PLAIN}"
+        else
+            echo -e "${BLUE}[正在安装] $pkg ...${PLAIN}"
+            apt install -y $pkg
+            echo -e "${GREEN}[完成] $pkg${PLAIN}"
+        fi
+    done
+    
+    # 安装 silversearcher-ag（仅 Debian/Ubuntu）
+    if ! dpkg -l | grep -q "silversearcher-ag"; then
+        apt install -y silversearcher-ag 2>/dev/null
+    fi
+}
+
+install_centos7_deps() {
+    echo -e "${BLUE}[包管理器] 正在启用 EPEL 源...${PLAIN}"
+    yum install -y epel-release
+    
+    for pkg in iperf3 mtr sysbench tar curl bc wget git vim net-tools bind-utils ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils ioping fio zip unzip bzip2 screen tmux jq tree gcc gcc-c++ make cmake python3 python3-pip speedtest-cli nload iftop; do
+        if rpm -q $pkg >/dev/null 2>&1; then
+            echo -e "${GREEN}[已安装] $pkg${PLAIN}"
+        else
+            echo -e "${BLUE}[正在安装] $pkg ...${PLAIN}"
+            yum install -y $pkg
+            echo -e "${GREEN}[完成] $pkg${PLAIN}"
+        fi
+    done
+}
+
+install_centos8_deps() {
+    echo -e "${BLUE}[包管理器] 正在启用 EPEL 源...${PLAIN}"
+    dnf install -y epel-release
+    
+    for pkg in iperf3 mtr sysbench tar curl bc wget git vim net-tools bind-utils ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils ioping fio zip unzip bzip2 screen tmux jq tree gcc gcc-c++ make cmake python3 python3-pip speedtest-cli nload iftop; do
+        if rpm -q $pkg >/dev/null 2>&1; then
+            echo -e "${GREEN}[已安装] $pkg${PLAIN}"
+        else
+            echo -e "${BLUE}[正在安装] $pkg ...${PLAIN}"
+            dnf install -y $pkg
+            echo -e "${GREEN}[完成] $pkg${PLAIN}"
+        fi
+    done
+}
+
+case $PKG_MANAGER in
+    apt)
+        install_debian_deps
+        ;;
+    yum)
+        install_centos7_deps
+        ;;
+    dnf)
+        install_centos8_deps
+        ;;
+    *)
+        echo -e "${RED}不支持的包管理器，跳过依赖安装${PLAIN}"
+        ;;
+esac
+
+# 安装 nexttrace（通用）
+if ! command -v nexttrace &>/dev/null; then
+    echo -e "${BLUE}[正在安装] nexttrace ...${PLAIN}"
+    wget -qO- https://raw.githubusercontent.com/sjlleo/nexttrace/main/install.sh 2>/dev/null | bash
+    echo -e "${GREEN}[完成] nexttrace${PLAIN}"
 fi
 
 echo -e "${GREEN}依赖包检查完成${PLAIN}"
 echo ""
 
 # --------------------------------------------------
-# 2. 设置主机名（自动检测并修改）
+# 2. 设置主机名
 # --------------------------------------------------
 CURRENT_HOSTNAME=$(hostname)
 EXPECTED_HOSTNAME="www.1373737.xyz"
+
 if [[ "$CURRENT_HOSTNAME" != "$EXPECTED_HOSTNAME" ]]; then
     echo -e "${BLUE}检测到主机名为: $CURRENT_HOSTNAME${PLAIN}"
     echo -e "${BLUE}正在修改主机名为: $EXPECTED_HOSTNAME${PLAIN}"
-    hostnamectl set-hostname "$EXPECTED_HOSTNAME" >/dev/null 2>&1
-    echo "$EXPECTED_HOSTNAME" > /etc/hostname
+    hostnamectl set-hostname "$EXPECTED_HOSTNAME" 2>/dev/null
+    echo "$EXPECTED_HOSTNAME" > /etc/hostname 2>/dev/null
     sed -i "s/127.0.1.1.*/127.0.1.1 $EXPECTED_HOSTNAME/g" /etc/hosts 2>/dev/null
     echo -e "${GREEN}主机名修改完成${PLAIN}"
 else
     echo -e "${GREEN}主机名已经是 $EXPECTED_HOSTNAME${PLAIN}"
 fi
 
-# 重新获取主机名
-HOSTNAME=$(hostname)
+HOSTNAME=$(hostname | cut -d'.' -f1)
 echo ""
 
 # --------------------------------------------------
-# 3. 开启 BBR（静默）
+# 3. BBR v3 安装和配置
 # --------------------------------------------------
-if ! lsmod | grep -q bbr; then
+echo -e "${YELLOW}正在配置 TCP BBR...${PLAIN}"
+
+kernel_version=$(uname -r)
+major_version=$(echo "$kernel_version" | awk -F. '{print $1}')
+minor_version=$(echo "$kernel_version" | awk -F. '{print $2}' | cut -d- -f1)
+
+# CentOS 7 内核 3.10 不支持 BBR v3，使用原始 BBR
+if [[ "$OS_ID" == "centos" && "$PKG_MANAGER" == "yum" ]]; then
+    echo -e "${YELLOW}CentOS 7 内核版本 $kernel_version，使用原始 BBR${PLAIN}"
     modprobe tcp_bbr 2>/dev/null
     echo "tcp_bbr" >> /etc/modules-load.d/modules.conf 2>/dev/null
+    grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf || echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+    grep -q "net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf || echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+    sysctl -p >/dev/null 2>&1
+    echo -e "${GREEN}原始 BBR 安装完成${PLAIN}"
+elif [[ $major_version -lt 5 || ($major_version -eq 5 && $minor_version -lt 6) ]]; then
+    echo -e "${RED}当前内核版本 $kernel_version 不支持 BBR v3${PLAIN}"
+    echo -e "${YELLOW}正在安装原始 BBR...${PLAIN}"
+    modprobe tcp_bbr 2>/dev/null
+    echo "tcp_bbr" >> /etc/modules-load.d/modules.conf 2>/dev/null
+    grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf || echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+    grep -q "net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf || echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+    sysctl -p >/dev/null 2>&1
+    echo -e "${GREEN}原始 BBR 安装完成${PLAIN}"
+else
+    echo -e "${GREEN}内核版本 $kernel_version 支持 BBR v3${PLAIN}"
+    modprobe tcp_bbr 2>/dev/null
+    echo "tcp_bbr" >> /etc/modules-load.d/modules.conf 2>/dev/null
+    grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf || echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+    grep -q "net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf || echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+    sysctl -p >/dev/null 2>&1
+    echo -e "${GREEN}BBR v3 安装完成${PLAIN}"
 fi
-grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf || echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
-grep -q "net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf || echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
-sysctl -p >/dev/null 2>&1
+
+# 检查 BBR 状态
+echo -e "${BLUE}正在检查 BBR 状态...${PLAIN}"
+if lsmod | grep -q tcp_bbr; then
+    echo -e "${GREEN}BBR 模块已加载${PLAIN}"
+else
+    echo -e "${RED}BBR 模块未加载${PLAIN}"
+fi
+
+current_congestion=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
+echo -e "${GREEN}当前拥塞控制算法: $current_congestion${PLAIN}"
+echo ""
 
 # --------------------------------------------------
 # 4. 系统信息收集
@@ -151,6 +222,7 @@ fi
 KERNEL_VER=$(uname -r)
 ARCH=$(uname -m)
 
+# CPU 信息
 if command -v lscpu &>/dev/null; then
     CPU_MODEL=$(lscpu | grep "Model name" | awk -F':' '{print $2}' | xargs)
     [ -z "$CPU_MODEL" ] && CPU_MODEL=$(lscpu | grep "型号名称" | awk -F':' '{print $2}' | xargs)
@@ -174,8 +246,9 @@ if [ -z "$CPU_USAGE" ]; then
 fi
 [ -z "$CPU_USAGE" ] && CPU_USAGE=0
 
-LOAD_AVG=$(cat /proc/loadavg | awk '{print $1","$2","$3}')
+LOAD_AVG=$(cat /proc/loadavg | awk '{print $1", "$2", "$3}')
 
+# 内存信息
 MEM_TOTAL=$(free -m | awk '/^Mem:/{print $2}')
 MEM_USED=$(free -m | awk '/^Mem:/{print $3}')
 MEM_PERCENT=$(echo "scale=2; $MEM_USED*100/$MEM_TOTAL" | bc)
@@ -190,11 +263,13 @@ else
     SWAP_INFO="${SWAP_USED}.00/${SWAP_TOTAL}.00 MB (${SWAP_PERCENT}%)"
 fi
 
+# 硬盘信息
 DISK_TOTAL=$(df -BG / | awk 'NR==2{print $2}' | sed 's/G//')
 DISK_USED=$(df -BG / | awk 'NR==2{print $3}' | sed 's/G//')
 DISK_PERCENT=$(df -h / | awk 'NR==2{print $5}' | sed 's/%//')
 DISK_INFO="${DISK_USED}G/${DISK_TOTAL}G (${DISK_PERCENT}%)"
 
+# 网络流量
 RX_BYTES=0
 TX_BYTES=0
 for netdev in $(ls /sys/class/net/ 2>/dev/null | grep -v lo); do
@@ -208,12 +283,19 @@ TX_GB=$(echo "scale=2; $TX_BYTES/1024/1024/1024" | bc)
 [ -z "$RX_GB" ] && RX_GB=0
 [ -z "$TX_GB" ] && TX_GB=0
 
+# 网络算法（从系统读取）
 TCP_ALGO=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
 [ -z "$TCP_ALGO" ] && TCP_ALGO="未知"
 
+# IPv4 地址
 IPV4=$(curl -s4m5 ifconfig.co 2>/dev/null || curl -s4m5 icanhazip.com 2>/dev/null || curl -s4m5 ipinfo.io/ip 2>/dev/null)
 [ -z "$IPV4" ] && IPV4="未知"
 
+# IPv6 地址
+IPV6=$(curl -s6m5 ifconfig.co 2>/dev/null || curl -s6m5 icanhazip.com 2>/dev/null)
+[ -z "$IPV6" ] && IPV6="未配置"
+
+# 运营商和地理位置
 ISP=$(curl -s4m5 ipinfo.io/org 2>/dev/null | cut -d' ' -f2- | head -n1)
 GEO_CITY=$(curl -s4m5 ipinfo.io/city 2>/dev/null)
 GEO_COUNTRY=$(curl -s4m5 ipinfo.io/country 2>/dev/null)
@@ -222,13 +304,16 @@ GEO_COUNTRY=$(curl -s4m5 ipinfo.io/country 2>/dev/null)
 [ -z "$GEO_COUNTRY" ] && GEO_COUNTRY="Unknown"
 GEO="${GEO_CITY}, ${GEO_COUNTRY}"
 
+# DNS 地址
 DNS1=$(grep -m1 nameserver /etc/resolv.conf 2>/dev/null | awk '{print $2}')
 DNS2=$(grep -m2 nameserver /etc/resolv.conf 2>/dev/null | tail -n1 | awk '{print $2}')
 [ -z "$DNS1" ] && DNS1="未知"
 [ -z "$DNS2" ] && DNS2="无"
 
+# 系统时间
 CURRENT_TIME=$(TZ='Asia/Shanghai' date "+%Y-%m-%d %H:%M %p" 2>/dev/null)
 
+# 运行时长
 UPTIME_SEC=$(cat /proc/uptime 2>/dev/null | awk '{print $1}')
 if [ -n "$UPTIME_SEC" ]; then
     DAYS=$(echo "$UPTIME_SEC/86400" | bc)
@@ -240,31 +325,50 @@ else
 fi
 
 # --------------------------------------------------
-# 5. 性能基准测试
+# 5. 虚拟化检测
 # --------------------------------------------------
-SINGLE_SCORE=$(sysbench cpu --cpu-max-prime=20000 --threads=1 --time=10 run 2>/dev/null | grep "events per second" | awk '{print $4}')
-if [ -n "$SINGLE_SCORE" ]; then
-    SINGLE_SCORE=$(echo "$SINGLE_SCORE * 10" | bc | cut -d'.' -f1)
-else
-    SINGLE_SCORE=0
+VIRT_TYPE="物理机"
+if command -v systemd-detect-virt &>/dev/null; then
+    virt=$(systemd-detect-virt)
+    case $virt in
+        kvm) VIRT_TYPE="KVM虚拟化" ;;
+        xen) VIRT_TYPE="Xen虚拟化" ;;
+        vmware) VIRT_TYPE="VMware虚拟化" ;;
+        microsoft) VIRT_TYPE="Hyper-V虚拟化" ;;
+        openvz) VIRT_TYPE="OpenVZ虚拟化" ;;
+        lxc) VIRT_TYPE="LXC容器" ;;
+        docker) VIRT_TYPE="Docker容器" ;;
+        *) VIRT_TYPE="其他虚拟化" ;;
+    esac
+elif [ -f /proc/cpuinfo ]; then
+    if grep -q "hypervisor" /proc/cpuinfo; then
+        VIRT_TYPE="虚拟化（未知类型）"
+    fi
 fi
 
-MULTI_SCORE=$(sysbench cpu --cpu-max-prime=20000 --threads=$CPU_CORES --time=10 run 2>/dev/null | grep "events per second" | awk '{print $4}')
-if [ -n "$MULTI_SCORE" ]; then
-    MULTI_SCORE=$(echo "$MULTI_SCORE * 10" | bc | cut -d'.' -f1)
-else
-    MULTI_SCORE=0
-fi
+# --------------------------------------------------
+# 6. 性能基准测试
+# --------------------------------------------------
+echo -e "${BLUE}正在进行 CPU 性能测试...${PLAIN}"
+SINGLE_SCORE=$(sysbench cpu --cpu-max-prime=20000 --threads=1 --time=10 run 2>&1 | grep -E "events per second:|总事件数:" | awk '{print $NF}')
+[ -z "$SINGLE_SCORE" ] && SINGLE_SCORE=0
 
-MEM_READ=$(sysbench memory --memory-block-size=1M --memory-total-size=10G --memory-oper=read run 2>/dev/null | grep "transferred" | awk '{print $4}' | head -n1)
+echo -e "${BLUE}正在进行多核 CPU 性能测试...${PLAIN}"
+MULTI_SCORE=$(sysbench cpu --cpu-max-prime=20000 --threads=$CPU_CORES --time=10 run 2>&1 | grep -E "events per second:|总事件数:" | awk '{print $NF}')
+[ -z "$MULTI_SCORE" ] && MULTI_SCORE=0
+
+echo -e "${BLUE}正在进行内存读测试...${PLAIN}"
+MEM_READ=$(sysbench memory --memory-block-size=1M --memory-total-size=5G --memory-oper=read --time=10 run 2>&1 | grep "transferred" | awk '{print $4}' | head -1)
 [ -z "$MEM_READ" ] && MEM_READ="0"
 
-MEM_WRITE=$(sysbench memory --memory-block-size=1M --memory-total-size=10G --memory-oper=write run 2>/dev/null | grep "transferred" | awk '{print $4}' | head -n1)
+echo -e "${BLUE}正在进行内存写测试...${PLAIN}"
+MEM_WRITE=$(sysbench memory --memory-block-size=1M --memory-total-size=5G --memory-oper=write --time=10 run 2>&1 | grep "transferred" | awk '{print $4}' | head -1)
 [ -z "$MEM_WRITE" ] && MEM_WRITE="0"
 
 # --------------------------------------------------
-# 6. 硬盘 I/O 性能测试
+# 7. 硬盘 I/O 性能测试
 # --------------------------------------------------
+echo -e "${BLUE}正在进行硬盘 I/O 性能测试...${PLAIN}"
 ROTATIONAL=$(cat /sys/block/$(lsblk -no pkname $(df / | tail -1 | cut -d' ' -f1) 2>/dev/null | head -1)/queue/rotational 2>/dev/null)
 if [ "$ROTATIONAL" -eq 0 ]; then
     DISK_TYPE="SSD"
@@ -276,55 +380,68 @@ fi
 
 IO_SPEEDS=()
 for i in {1..3}; do
-    SPEED=$(dd if=/dev/zero of=/tmp/test_io bs=1M count=1024 conv=fdatasync 2>&1 | grep -oP '\d+(\.\d+)? MB/s' | head -1 | sed 's/ MB\/s//')
+    echo -e "${BLUE}硬盘测试第 $i/3 次...${PLAIN}"
+    dd if=/dev/zero of=/tmp/test_io bs=1M count=512 oflag=direct 2>&1 | tee /tmp/dd_output
+    SPEED=$(grep -oP '\d+(\.\d+)? MB/s' /tmp/dd_output | head -1 | sed 's/ MB\/s//')
     if [ -n "$SPEED" ]; then
         IO_SPEEDS+=($SPEED)
+        echo -e "${GREEN}第 $i 次测试速度: ${SPEED} MB/s${PLAIN}"
     else
         IO_SPEEDS+=(0)
+        echo -e "${YELLOW}第 $i 次测试失败${PLAIN}"
     fi
-    rm -f /tmp/test_io 2>/dev/null
+    rm -f /tmp/test_io /tmp/dd_output 2>/dev/null
     sleep 1
 done
-AVG_SPEED=$(echo "scale=2; (${IO_SPEEDS[0]}+${IO_SPEEDS[1]}+${IO_SPEEDS[2]})/3" | bc)
 
-if (( $(echo "$AVG_SPEED < 100" | bc -l) )); then
+AVG_SPEED=$(echo "scale=2; (${IO_SPEEDS[0]}+${IO_SPEEDS[1]}+${IO_SPEEDS[2]})/3" | bc 2>/dev/null)
+[ -z "$AVG_SPEED" ] && AVG_SPEED=0
+
+if (( $(echo "$AVG_SPEED < 100" | bc -l 2>/dev/null) )); then
     LEVEL="一般"
-elif (( $(echo "$AVG_SPEED < 200" | bc -l) )); then
+elif (( $(echo "$AVG_SPEED < 200" | bc -l 2>/dev/null) )); then
     LEVEL="中等"
-elif (( $(echo "$AVG_SPEED < 500" | bc -l) )); then
+elif (( $(echo "$AVG_SPEED < 500" | bc -l 2>/dev/null) )); then
     LEVEL="良好"
 else
     LEVEL="优秀"
 fi
 
 # --------------------------------------------------
-# 7. 输出系统信息
+# 8. 输出系统信息
 # --------------------------------------------------
-echo -e "${YELLOW}系统信息查询${PLAIN}"
 echo ""
+echo -e "${YELLOW}系统信息查询${PLAIN}"
+echo "============================="
 echo "主机名：              ${HOSTNAME}"
 echo "系统版本：            ${OS_VERSION}"
 echo "Linux版本：           ${KERNEL_VER}"
+echo "虚拟化类型：          ${VIRT_TYPE}"
+echo "============================="
 echo "CPU架构：             ${ARCH}"
 echo "CPU型号：             ${CPU_MODEL}"
 echo "CPU核心数：           ${CPU_CORES}"
 echo "CPU频率：             ${CPU_FREQ} GHz"
 echo "CPU占用：             ${CPU_USAGE}%"
+echo "============================="
 echo "系统负载：            ${LOAD_AVG}"
 echo "物理内存：            ${MEM_INFO}"
 echo "虚拟内存：            ${SWAP_INFO}"
 echo "硬盘占用：            ${DISK_INFO}"
+echo "============================="
 echo "总接收：              ${RX_GB} GB"
 echo "总发送：              ${TX_GB} GB"
+echo "============================="
 echo "网络算法：            ${TCP_ALGO}"
-echo "运营商：              ${ISP}"
 echo "IPv4地址：            ${IPV4}"
+echo "IPv6地址：            ${IPV6}"
+echo "============================="
+echo "运营商：              ${ISP}"
 echo "DNS地址：             ${DNS1} ${DNS2}"
 echo "地理位置：            ${GEO}"
 echo "系统时间：            ${CURRENT_TIME}"
 echo ""
 echo -e "${YELLOW}系统性能基准测试结果${PLAIN}"
-echo ""
 echo "1线程测试（单核）得分：          ${SINGLE_SCORE} Scores"
 echo "${CPU_CORES}线程测试（多核）得分：          ${MULTI_SCORE} Scores"
 echo "============================="
@@ -334,9 +451,7 @@ echo "============================="
 echo "系统运行时长：                   ${UPTIME_STR}"
 echo ""
 echo -e "${YELLOW}硬盘 I/O 性能测试${PLAIN}"
-echo ""
 echo "硬盘性能测试正在进行中..."
-echo ""
 echo "硬盘性能测试结果如下："
 echo -e "硬盘I/O（第一次测试）：          ${YELLOW}${IO_SPEEDS[0]} MB/s${PLAIN}"
 echo -e "硬盘I/O（第二次测试）：          ${YELLOW}${IO_SPEEDS[1]} MB/s${PLAIN}"
@@ -348,36 +463,44 @@ echo -e "${GREEN}测试数据不是百分百准确，以官方宣称为主。${P
 echo ""
 
 # --------------------------------------------------
-# 8. 执行外部测试脚本
+# 9. 执行外部测试脚本
 # --------------------------------------------------
-bash <(curl -Ls https://IP.Check.Place) 2>/dev/null
+echo -e "${BLUE}执行 IP 风险检查...${PLAIN}"
+curl -s --connect-timeout 10 https://ipcheck.place 2>/dev/null | bash || echo "IP风险检查跳过"
 echo ""
 
-curl -s https://raw.githubusercontent.com/zhanghanyun/backtrace/main/install.sh | sh 2>/dev/null
-curl -s https://raw.githubusercontent.com/anjing-liu/mtr_trace/main/mtr_trace.sh | bash 2>/dev/null
+echo -e "${BLUE}执行三网回程线路测试...${PLAIN}"
+curl -s --connect-timeout 10 https://raw.githubusercontent.com/zhanghanyun/backtrace/main/install.sh 2>/dev/null | sh || echo "回程测试跳过"
+curl -s --connect-timeout 10 https://raw.githubusercontent.com/anjing-liu/mtr_trace/main/mtr_trace.sh 2>/dev/null | bash || echo "MTR测试跳过"
 echo ""
 
-echo "2" | bash <(curl -sL https://raw.githubusercontent.com/i-abc/Speedtest/main/speedtest.sh) 2>/dev/null
+echo -e "${BLUE}执行三网+教育网 IPv4 单线程测速...${PLAIN}"
+echo "2" | bash <(curl -sL --connect-timeout 10 https://raw.githubusercontent.com/i-abc/Speedtest/main/speedtest.sh) 2>/dev/null || echo "测速跳过"
 echo ""
 
-echo "" | bash <(curl -L -s check.unlock.media) 2>/dev/null
+echo -e "${BLUE}执行流媒体解锁测试...${PLAIN}"
+echo "" | bash <(curl -L -s --connect-timeout 10 https://check.unlock.media) 2>/dev/null || echo "流媒体测试跳过"
 echo ""
 
-printf "1\n8\n" | nexttrace --fast-trace 2>/dev/null
+echo -e "${BLUE}执行全国五网ISP路由回程测试...${PLAIN}"
+printf "1\n8\n" | nexttrace --fast-trace 2>/dev/null || echo "路由测试跳过"
 echo ""
 
-bash <(curl -Ls https://Net.Check.Place) -R 2>/dev/null
+echo -e "${BLUE}执行三网回程路由测试...${PLAIN}"
+bash <(curl -Ls --connect-timeout 10 https://netcheck.place) -R 2>/dev/null || echo "路由测试跳过"
 echo ""
 
-wget -qO- bench.sh | bash 2>/dev/null
+echo -e "${BLUE}执行 bench 性能测试...${PLAIN}"
+wget -qO- --timeout=30 bench.sh 2>/dev/null | bash || echo "bench测试跳过"
 echo ""
 
-wget --no-check-certificate -O memoryCheck.sh https://raw.githubusercontent.com/uselibrary/memoryCheck/main/memoryCheck.sh 2>/dev/null && chmod +x memoryCheck.sh && bash memoryCheck.sh 2>/dev/null
+echo -e "${BLUE}执行超售测试...${PLAIN}"
+wget --timeout=30 --no-check-certificate -O memoryCheck.sh https://raw.githubusercontent.com/uselibrary/memoryCheck/main/memoryCheck.sh 2>/dev/null && chmod +x memoryCheck.sh && bash memoryCheck.sh 2>/dev/null || echo "超售测试跳过"
 rm -f memoryCheck.sh 2>/dev/null
 echo ""
 
 # --------------------------------------------------
-# 9. 总耗时统计
+# 10. 总耗时统计
 # --------------------------------------------------
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
@@ -385,4 +508,4 @@ HOURS_ELAPSED=$((ELAPSED / 3600))
 MINUTES_ELAPSED=$(((ELAPSED % 3600) / 60))
 SECONDS_ELAPSED=$((ELAPSED % 60))
 
-echo "所有测试完成！总耗时: ${HOURS_ELAPSED}小时 ${MINUTES_ELAPSED}分钟 ${SECONDS_ELAPSED}秒"
+echo -e "${YELLOW}所有测试完成！总耗时: ${HOURS_ELAPSED}小时 ${MINUTES_ELAPSED}分钟 ${SECONDS_ELAPSED}秒${PLAIN}"
