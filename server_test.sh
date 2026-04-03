@@ -1,124 +1,136 @@
 #!/bin/bash
 # ==================================================
 # 服务器测试一键脚本
-# 版本：3.0
+# 版本：3.1
+# 功能：系统信息收集、性能测试、网络测试、依赖安装
 # ==================================================
 
 # 颜色定义
 YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
+BLUE='\033[0;34m'
 PLAIN='\033[0m'
 
 # 开始计时
 START_TIME=$(date +%s)
 
 # 检查是否为root用户
-[[ $EUID -ne 0 ]] && echo "错误：请使用 root 用户运行此脚本" && exit 1
+[[ $EUID -ne 0 ]] && echo -e "${YELLOW}错误：请使用 root 用户运行此脚本${PLAIN}" && exit 1
 
 # 设置脚本出错时继续执行
 set +e
 
 # --------------------------------------------------
-# 1. 安装依赖（静默）- 增加常用依赖
+# 1. 安装依赖（显示详细进度）
 # --------------------------------------------------
 echo -e "${YELLOW}正在安装依赖包...${PLAIN}"
+echo ""
 
 if command -v apt &>/dev/null; then
-    # Debian/Ubuntu 系列
+    echo -e "${BLUE}[包管理器] 检测到 Debian/Ubuntu 系统${PLAIN}"
+    echo -e "${BLUE}[包管理器] 正在更新软件源 (apt update)...${PLAIN}"
     apt update -y >/dev/null 2>&1
-    apt install -y \
-        iperf3 mtr sysbench tar curl bc \
-        wget git vim net-tools dnsutils \
-        ethtool pciutils usbutils lsof \
-        htop nmon glances \
-        speedtest-cli ioping fio \
-        build-essential cmake \
-        python3 python3-pip \
-        ntpdate chrony \
-        zip unzip bzip2 \
-        screen tmux \
-        tcpdump nmap \
-        rsync tree \
-        jq silversearcher-ag \
-        >/dev/null 2>&1
+    echo -e "${GREEN}[包管理器] 软件源更新完成${PLAIN}"
+    
+    echo -e "${BLUE}[包管理器] 正在安装基础依赖: iperf3 mtr sysbench tar curl bc ...${PLAIN}"
+    apt install -y iperf3 mtr sysbench tar curl bc >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装网络工具: wget git vim net-tools dnsutils ethtool tcpdump nmap ...${PLAIN}"
+    apt install -y wget git vim net-tools dnsutils ethtool tcpdump nmap >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装监控工具: htop nmon lsof rsync ...${PLAIN}"
+    apt install -y htop nmon lsof rsync >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装硬件检测工具: pciutils usbutils ...${PLAIN}"
+    apt install -y pciutils usbutils >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装磁盘测试工具: ioping fio ...${PLAIN}"
+    apt install -y ioping fio >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装开发编译工具: build-essential cmake python3 ...${PLAIN}"
+    apt install -y build-essential cmake python3 python3-pip >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装压缩工具: zip unzip bzip2 ...${PLAIN}"
+    apt install -y zip unzip bzip2 >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装其他工具: screen tmux jq tree silversearcher-ag ...${PLAIN}"
+    apt install -y screen tmux jq tree silversearcher-ag >/dev/null 2>&1
+    
 elif command -v yum &>/dev/null; then
-    # CentOS 7/RHEL 7 系列
+    echo -e "${BLUE}[包管理器] 检测到 CentOS/RHEL 7 系统${PLAIN}"
+    echo -e "${BLUE}[包管理器] 正在启用 EPEL 源...${PLAIN}"
     yum install -y epel-release >/dev/null 2>&1
-    yum install -y \
-        iperf3 mtr sysbench tar curl bc \
-        wget git vim net-tools bind-utils \
-        ethtool pciutils usbutils lsof \
-        htop nmon \
-        ioping fio \
-        gcc gcc-c++ make cmake \
-        python3 python3-pip \
-        ntpdate chrony \
-        zip unzip bzip2 \
-        screen tmux \
-        tcpdump nmap \
-        rsync tree \
-        jq \
-        >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装基础依赖: iperf3 mtr sysbench tar curl bc ...${PLAIN}"
+    yum install -y iperf3 mtr sysbench tar curl bc >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装网络工具: wget git vim net-tools bind-utils ethtool tcpdump nmap ...${PLAIN}"
+    yum install -y wget git vim net-tools bind-utils ethtool tcpdump nmap >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装监控工具: htop nmon lsof rsync ...${PLAIN}"
+    yum install -y htop nmon lsof rsync >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装硬件检测工具: pciutils usbutils ...${PLAIN}"
+    yum install -y pciutils usbutils >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装磁盘测试工具: ioping fio ...${PLAIN}"
+    yum install -y ioping fio >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装开发编译工具: gcc gcc-c++ make cmake python3 ...${PLAIN}"
+    yum install -y gcc gcc-c++ make cmake python3 python3-pip >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装压缩工具: zip unzip bzip2 ...${PLAIN}"
+    yum install -y zip unzip bzip2 >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装其他工具: screen tmux jq tree ...${PLAIN}"
+    yum install -y screen tmux jq tree >/dev/null 2>&1
+    
 elif command -v dnf &>/dev/null; then
-    # CentOS 8/RHEL 8 系列
+    echo -e "${BLUE}[包管理器] 检测到 CentOS/RHEL 8+ 系统${PLAIN}"
+    echo -e "${BLUE}[包管理器] 正在启用 EPEL 源...${PLAIN}"
     dnf install -y epel-release >/dev/null 2>&1
-    dnf install -y \
-        iperf3 mtr sysbench tar curl bc \
-        wget git vim net-tools bind-utils \
-        ethtool pciutils usbutils lsof \
-        htop nmon \
-        ioping fio \
-        gcc gcc-c++ make cmake \
-        python3 python3-pip \
-        ntpdate chrony \
-        zip unzip bzip2 \
-        screen tmux \
-        tcpdump nmap \
-        rsync tree \
-        jq \
-        >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装基础依赖: iperf3 mtr sysbench tar curl bc ...${PLAIN}"
+    dnf install -y iperf3 mtr sysbench tar curl bc >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装网络工具: wget git vim net-tools bind-utils ethtool tcpdump nmap ...${PLAIN}"
+    dnf install -y wget git vim net-tools bind-utils ethtool tcpdump nmap >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装监控工具: htop nmon lsof rsync ...${PLAIN}"
+    dnf install -y htop nmon lsof rsync >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装硬件检测工具: pciutils usbutils ...${PLAIN}"
+    dnf install -y pciutils usbutils >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装磁盘测试工具: ioping fio ...${PLAIN}"
+    dnf install -y ioping fio >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装开发编译工具: gcc gcc-c++ make cmake python3 ...${PLAIN}"
+    dnf install -y gcc gcc-c++ make cmake python3 python3-pip >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装压缩工具: zip unzip bzip2 ...${PLAIN}"
+    dnf install -y zip unzip bzip2 >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装其他工具: screen tmux jq tree ...${PLAIN}"
+    dnf install -y screen tmux jq tree >/dev/null 2>&1
+    
 elif command -v pacman &>/dev/null; then
-    # Arch Linux 系列
-    pacman -Sy --noconfirm \
-        iperf3 mtr sysbench tar curl bc \
-        wget git vim net-tools dnsutils \
-        ethtool pciutils usbutils lsof \
-        htop nmon \
-        ioping fio \
-        base-devel cmake \
-        python python-pip \
-        ntpdate chrony \
-        zip unzip bzip2 \
-        screen tmux \
-        tcpdump nmap \
-        rsync tree \
-        jq the_silver_searcher \
-        >/dev/null 2>&1
+    echo -e "${BLUE}[包管理器] 检测到 Arch Linux 系统${PLAIN}"
+    echo -e "${BLUE}[包管理器] 正在同步软件源...${PLAIN}"
+    pacman -Sy --noconfirm >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装所有依赖包...${PLAIN}"
+    pacman -S --noconfirm iperf3 mtr sysbench tar curl bc wget git vim net-tools dnsutils ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils ioping fio base-devel cmake python python-pip zip unzip bzip2 screen tmux jq tree the_silver_searcher >/dev/null 2>&1
+    
 elif command -v apk &>/dev/null; then
-    # Alpine Linux 系列
+    echo -e "${BLUE}[包管理器] 检测到 Alpine Linux 系统${PLAIN}"
+    echo -e "${BLUE}[包管理器] 正在更新软件源...${PLAIN}"
     apk update >/dev/null 2>&1
-    apk add \
-        iperf3 mtr sysbench tar curl bc \
-        wget git vim net-tools bind-tools \
-        ethtool pciutils usbutils lsof \
-        htop nmon \
-        ioping fio \
-        gcc g++ make cmake \
-        python3 py3-pip \
-        ntpdate chrony \
-        zip unzip bzip2 \
-        screen tmux \
-        tcpdump nmap \
-        rsync tree \
-        jq the_silver_searcher \
-        >/dev/null 2>&1
+    
+    echo -e "${BLUE}[包管理器] 正在安装所有依赖包...${PLAIN}"
+    apk add iperf3 mtr sysbench tar curl bc wget git vim net-tools bind-tools ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils ioping fio gcc g++ make cmake python3 py3-pip zip unzip bzip2 screen tmux jq tree the_silver_searcher >/dev/null 2>&1
 else
-    echo "不支持的包管理器，将只安装基础依赖..."
-    # 尝试安装基础依赖
-    command -v iperf3 || echo "请手动安装: iperf3"
-    command -v mtr || echo "请手动安装: mtr"
-    command -v sysbench || echo "请手动安装: sysbench"
-    command -v bc || echo "请手动安装: bc"
+    echo -e "${YELLOW}[包管理器] 未检测到支持的包管理器，跳过自动安装${PLAIN}"
 fi
 
 echo -e "${GREEN}依赖包安装完成${PLAIN}"
@@ -308,7 +320,7 @@ else
 fi
 
 # --------------------------------------------------
-# 7. 输出系统信息（按颜色要求）
+# 7. 输出系统信息
 # --------------------------------------------------
 echo -e "${YELLOW}系统信息查询${PLAIN}"
 echo ""
