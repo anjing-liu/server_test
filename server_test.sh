@@ -310,12 +310,12 @@ if [ "$CPU_CORES" -gt 1 ]; then
 fi
 
 echo -e "${BLUE}内存读测试...${PLAIN}"
-MEM_READ=$(sysbench memory --memory-block-size=1M --memory-total-size=5G --memory-oper=read --time=10 run 2>&1 | grep "transferred" | awk '{print $4}' | head -1)
+MEM_READ=$(sysbench memory --memory-block-size=1M --memory-total-size=5G --memory-oper=read --time=10 run 2>&1 | grep "transferred" | awk '{print $4}' | head -1 | tr -d '(')
 [ -z "$MEM_READ" ] && MEM_READ=0
 echo -e "${GREEN}内存读: $MEM_READ MB/s${PLAIN}"
 
 echo -e "${BLUE}内存写测试...${PLAIN}"
-MEM_WRITE=$(sysbench memory --memory-block-size=1M --memory-total-size=5G --memory-oper=write --time=10 run 2>&1 | grep "transferred" | awk '{print $4}' | head -1)
+MEM_WRITE=$(sysbench memory --memory-block-size=1M --memory-total-size=5G --memory-oper=write --time=10 run 2>&1 | grep "transferred" | awk '{print $4}' | head -1 | tr -d '(')
 [ -z "$MEM_WRITE" ] && MEM_WRITE=0
 echo -e "${GREEN}内存写: $MEM_WRITE MB/s${PLAIN}"
 
