@@ -1,9 +1,7 @@
 #!/bin/bash
 # ==================================================
 # 服务器测试一键脚本
-# 版本：5.5 - 完整版（修复流媒体测试与路由测试输出）
-# 功能：系统信息、性能测试、BBR管理、虚拟化检测、IPv6支持、外部测试
-# 快捷命令：安装后输入 sn 即可运行
+# 版本：5.6 - 完全自动化（修复所有交互）
 # ==================================================
 
 # 颜色定义
@@ -285,7 +283,7 @@ fi
 CPU_CORES=$(nproc)
 [ -z "$CPU_CORES" ] && CPU_CORES=1
 
-# CPU 频率 - 修复单位
+# CPU 频率
 CPU_FREQ_RAW=""
 if command -v lscpu &>/dev/null; then
     CPU_FREQ_RAW=$(lscpu 2>/dev/null | grep "CPU MHz" | awk -F':' '{print $2}' | xargs | cut -d'.' -f1)
@@ -339,7 +337,7 @@ DISK_USED=$(df -BG / | awk 'NR==2{print $3}' | sed 's/G//')
 DISK_PERCENT=$(df -h / | awk 'NR==2{print $5}' | sed 's/%//')
 DISK_INFO="${DISK_USED}G/${DISK_TOTAL}G (${DISK_PERCENT}%)"
 
-# 网络流量 - 修复显示格式
+# 网络流量
 RX_BYTES=0
 TX_BYTES=0
 for netdev in $(ls /sys/class/net/ 2>/dev/null | grep -v lo); do
@@ -534,39 +532,36 @@ echo "硬盘性能等级： ${LEVEL}"
 echo -e "${GREEN}测试数据不是百分百准确，以官方宣称为主。${PLAIN}\n"
 
 # --------------------------------------------------
-# 外部测试脚本（确保输出可见，增加等待时间）
+# 外部测试脚本（修复所有交互）
 # --------------------------------------------------
 
-# 1. IP 风险检查
+# 1. IP 风险检查（无交互，直接执行）
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[1/8] 执行 IP 风险检查...${PLAIN}"
-bash <(curl -sL --connect-timeout 15 https://ipcheck.place)
-sleep 2
+bash <(curl -L --connect-timeout 15 https://ipcheck.place)
 echo -e "${GREEN}IP 风险检查完成${PLAIN}\n"
 
 # 2. 三网回程线路测试
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[2/8] 执行三网回程线路测试...${PLAIN}"
-curl -s --connect-timeout 15 https://raw.githubusercontent.com/zhanghanyun/backtrace/main/install.sh | sh
-curl -s --connect-timeout 15 https://raw.githubusercontent.com/anjing-liu/mtr_trace/main/mtr_trace.sh | bash
-sleep 2
+curl --connect-timeout 15 https://raw.githubusercontent.com/zhanghanyun/backtrace/main/install.sh | sh
+curl --connect-timeout 15 https://raw.githubusercontent.com/anjing-liu/mtr_trace/main/mtr_trace.sh | bash
 echo -e "${GREEN}回程测试完成${PLAIN}\n"
 
-# 3. 三网+教育网 IPv4 单线程测速
+# 3. 三网+教育网 IPv4 单线程测速（自动选择2）
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[3/8] 执行三网+教育网 IPv4 单线程测速...${PLAIN}"
-echo "2" | bash <(curl -sL --connect-timeout 15 https://raw.githubusercontent.com/i-abc/Speedtest/main/speedtest.sh)
-sleep 2
+echo "2" | bash <(curl -L --connect-timeout 15 https://raw.githubusercontent.com/i-abc/Speedtest/main/speedtest.sh)
 echo -e "${GREEN}测速完成${PLAIN}\n"
 
-# 4. 流媒体解锁测试（模拟回车并等待）
+# 4. 流媒体解锁测试（发送 66 然后回车，执行全平台检测）
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[4/8] 执行流媒体解锁测试...${PLAIN}"
-printf '\n' | bash <(curl -L -s --connect-timeout 15 https://check.unlock.media)
-sleep 5   # 等待脚本输出结果
+printf "66\n" | bash <(curl -L --connect-timeout 15 https://check.unlock.media)
+sleep 5  # 等待脚本输出完成
 echo -e "${GREEN}流媒体测试完成${PLAIN}\n"
 
-# 5. 全国五网ISP路由回程测试
+# 5. 全国五网ISP路由回程测试（自动选择1和8）
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[5/8] 执行全国五网ISP路由回程测试...${PLAIN}"
 if command -v nexttrace &>/dev/null; then
@@ -576,21 +571,19 @@ elif [ -f /usr/local/bin/nexttrace ]; then
 else
     echo -e "${YELLOW}nexttrace 未安装，跳过路由测试${PLAIN}"
 fi
-sleep 2
 echo -e "${GREEN}路由测试完成${PLAIN}\n"
 
-# 6. 三网回程路由测试（等待广告加载）
+# 6. 三网回程路由测试（自动发送 y 确认依赖安装，然后等待）
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[6/8] 执行三网回程路由测试...${PLAIN}"
-bash <(curl -sL --connect-timeout 15 https://netcheck.place) -R
-sleep 5   # 等待广告和完整输出
+printf "y\n" | bash <(curl -L --connect-timeout 15 https://netcheck.place) -R
+sleep 10  # 等待依赖安装和路由测试完成
 echo -e "${GREEN}回程路由测试完成${PLAIN}\n"
 
 # 7. bench 性能测试
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[7/8] 执行 bench 性能测试...${PLAIN}"
 wget -qO- --timeout=30 bench.sh | bash
-sleep 2
 echo -e "${GREEN}bench测试完成${PLAIN}\n"
 
 # 8. 超售测试
@@ -598,7 +591,6 @@ echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[8/8] 执行超售测试...${PLAIN}"
 wget --timeout=30 --no-check-certificate -O memoryCheck.sh https://raw.githubusercontent.com/uselibrary/memoryCheck/main/memoryCheck.sh && chmod +x memoryCheck.sh && bash memoryCheck.sh
 rm -f memoryCheck.sh
-sleep 2
 echo -e "${GREEN}超售测试完成${PLAIN}\n"
 
 # --------------------------------------------------
