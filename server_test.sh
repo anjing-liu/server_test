@@ -1,7 +1,9 @@
 #!/bin/bash
 # ==================================================
 # 服务器测试一键脚本
-# 版本：4.5 - 最终修复版
+# 版本：5.1 - 含快捷命令 sn
+# 功能：系统信息检测、性能测试、BBR管理、虚拟化检测、IPv6支持
+# 快捷命令：安装后输入 sn 即可运行
 # ==================================================
 
 # 颜色定义
@@ -9,7 +11,42 @@ YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 RED='\033[0;31m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
 PLAIN='\033[0m'
+
+# --------------------------------------------------
+# 创建快捷命令 sn（第二次运行时直接输入 sn 即可）
+# --------------------------------------------------
+create_shortcut() {
+    local SCRIPT_PATH=""
+    
+    # 获取脚本真实路径
+    if [ -n "$BASH_SOURCE" ] && [ -f "$BASH_SOURCE" ]; then
+        SCRIPT_PATH=$(realpath "$BASH_SOURCE" 2>/dev/null)
+    fi
+    if [ -z "$SCRIPT_PATH" ]; then
+        SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null)
+    fi
+    if [ -z "$SCRIPT_PATH" ]; then
+        SCRIPT_PATH=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+    fi
+    
+    # 创建快捷命令
+    if [ -f "$SCRIPT_PATH" ]; then
+        if [ ! -f /usr/local/bin/sn ]; then
+            ln -sf "$SCRIPT_PATH" /usr/local/bin/sn 2>/dev/null
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}✓ 快捷命令已创建：输入 'sn' 即可运行本脚本${PLAIN}"
+            fi
+        fi
+        # 确保 sn 有执行权限
+        chmod +x /usr/local/bin/sn 2>/dev/null
+    fi
+}
+
+# 创建快捷命令
+create_shortcut
 
 # 设置环境变量 - 禁用所有交互式提示
 export DEBIAN_FRONTEND=noninteractive
@@ -65,7 +102,7 @@ echo -e "${GREEN}检测到系统: $OS_ID, 包管理器: $PKG_MANAGER${PLAIN}"
 echo ""
 
 # --------------------------------------------------
-# 1. 安装依赖
+# 1. 安装依赖（完全自动确认，智能跳过已安装）
 # --------------------------------------------------
 echo -e "${YELLOW}正在检查并安装依赖包...${PLAIN}"
 echo ""
@@ -73,6 +110,7 @@ echo ""
 install_debian_deps() {
     echo -e "${BLUE}[包管理器] 检测到 Debian/Ubuntu 系统${PLAIN}"
     
+    # 智能更新软件源（24小时内只更新一次）
     if [ ! -f "$APT_UPDATED_FLAG" ]; then
         echo -e "${BLUE}[包管理器] 正在更新软件源...${PLAIN}"
         apt update -y -qq 2>/dev/null
@@ -87,6 +125,7 @@ install_debian_deps() {
         sed -i 's/#$nrconf{restart} = '"'"'i'"'"';/$nrconf{restart} = '"'"'a'"'"';/g' /etc/needrestart/needrestart.conf 2>/dev/null
     fi
     
+    # 定义需要安装的包列表
     local packages=(
         iperf3 mtr sysbench tar curl bc wget git vim net-tools dnsutils 
         ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils 
@@ -99,6 +138,7 @@ install_debian_deps() {
         packages+=(build-essential)
     fi
     
+    # 收集未安装的包
     local missing_pkgs=()
     for pkg in "${packages[@]}"; do
         if dpkg -l 2>/dev/null | grep -q "^ii  $pkg "; then
@@ -108,6 +148,7 @@ install_debian_deps() {
         fi
     done
     
+    # 批量安装未安装的包
     if [ ${#missing_pkgs[@]} -gt 0 ]; then
         echo -e "${BLUE}[正在安装] ${#missing_pkgs[@]} 个依赖包...${PLAIN}"
         DEBIAN_FRONTEND=noninteractive apt install -y -qq "${missing_pkgs[@]}" 2>/dev/null
@@ -120,6 +161,7 @@ install_debian_deps() {
 install_centos7_deps() {
     echo -e "${BLUE}[包管理器] 检测到 CentOS/RHEL 7 系统${PLAIN}"
     
+    # 检查 EPEL 是否已安装
     if ! rpm -q epel-release >/dev/null 2>&1; then
         echo -e "${BLUE}[包管理器] 正在启用 EPEL 源...${PLAIN}"
         rpm --import https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-7 2>/dev/null
@@ -206,9 +248,9 @@ case $PKG_MANAGER in
         ;;
 esac
 
-# 安装 nexttrace
+# 安装 nexttrace（用于路由测试）
 if ! command -v nexttrace &>/dev/null; then
-    echo -e "${BLUE}[正在安装] nexttrace ...${PLAIN}"
+    echo -e "${BLUE}[正在安装] nexttrace 路由追踪工具...${PLAIN}"
     wget -qO- https://raw.githubusercontent.com/sjlleo/nexttrace/main/install.sh 2>/dev/null | bash
     echo -e "${GREEN}[完成] nexttrace${PLAIN}"
 fi
@@ -372,7 +414,7 @@ TCP_ALGO=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
 IPV4=$(curl -s4m5 ifconfig.co 2>/dev/null || curl -s4m5 icanhazip.com 2>/dev/null || curl -s4m5 ipinfo.io/ip 2>/dev/null)
 [ -z "$IPV4" ] && IPV4="未知"
 
-# IPv6 地址（静默获取，不显示错误）
+# IPv6 地址（静默获取）
 IPV6=$(curl -s6m5 ifconfig.co 2>/dev/null || curl -s6m5 icanhazip.com 2>/dev/null)
 if [ -z "$IPV6" ]; then
     IPV6="未配置"
@@ -572,46 +614,68 @@ echo -e "${GREEN}测试数据不是百分百准确，以官方宣称为主。${P
 echo ""
 
 # --------------------------------------------------
-# 9. 执行外部测试脚本（确保有输出）
+# 9. 执行外部测试脚本
 # --------------------------------------------------
-echo -e "${BLUE}执行 IP 风险检查...${PLAIN}"
-curl -s --connect-timeout 15 https://ipcheck.place 2>/dev/null | bash
-if [ $? -ne 0 ]; then
-    echo -e "${YELLOW}IP 风险检查暂时不可用，跳过${PLAIN}"
+
+# 确保 nexttrace 已安装
+if ! command -v nexttrace &>/dev/null; then
+    echo -e "${YELLOW}正在安装 nexttrace 路由追踪工具...${PLAIN}"
+    wget -qO- https://raw.githubusercontent.com/sjlleo/nexttrace/main/install.sh | bash
+    echo -e "${GREEN}nexttrace 安装完成${PLAIN}"
 fi
+
+# 1. IP 风险检查
+echo -e "${BLUE}========================================${PLAIN}"
+echo -e "${BLUE}[1/8] 执行 IP 风险检查...${PLAIN}"
+bash <(curl -Ls https://ipcheck.place) 2>/dev/null
 echo ""
 
-echo -e "${BLUE}执行三网回程线路测试...${PLAIN}"
-curl -s --connect-timeout 15 https://raw.githubusercontent.com/zhanghanyun/backtrace/main/install.sh 2>/dev/null | sh
-if [ $? -ne 0 ]; then
-    echo -e "${YELLOW}回程测试暂时不可用，跳过${PLAIN}"
-fi
-curl -s --connect-timeout 15 https://raw.githubusercontent.com/anjing-liu/mtr_trace/main/mtr_trace.sh 2>/dev/null | bash
+# 2. 三网回程线路测试
+echo -e "${BLUE}========================================${PLAIN}"
+echo -e "${BLUE}[2/8] 执行三网回程线路测试...${PLAIN}"
+curl https://raw.githubusercontent.com/zhanghanyun/backtrace/main/install.sh -sSf | sh
+curl https://raw.githubusercontent.com/anjing-liu/mtr_trace/main/mtr_trace.sh | bash
 echo ""
 
-echo -e "${BLUE}执行三网+教育网 IPv4 单线程测速...${PLAIN}"
-echo "2" | bash <(curl -sL --connect-timeout 15 https://raw.githubusercontent.com/i-abc/Speedtest/main/speedtest.sh) 2>/dev/null
+# 3. 三网+教育网 IPv4 单线程测速（自动选择2）
+echo -e "${BLUE}========================================${PLAIN}"
+echo -e "${BLUE}[3/8] 执行三网+教育网 IPv4 单线程测速...${PLAIN}"
+echo "2" | bash <(curl -sL https://raw.githubusercontent.com/i-abc/Speedtest/main/speedtest.sh)
 echo ""
 
-echo -e "${BLUE}执行流媒体解锁测试...${PLAIN}"
-echo "" | bash <(curl -L -s --connect-timeout 15 https://check.unlock.media) 2>/dev/null
+# 4. 流媒体解锁测试（自动回车）
+echo -e "${BLUE}========================================${PLAIN}"
+echo -e "${BLUE}[4/8] 执行流媒体解锁测试...${PLAIN}"
+echo "" | bash <(curl -L -s https://check.unlock.media)
 echo ""
 
-echo -e "${BLUE}执行全国五网ISP路由回程测试...${PLAIN}"
-printf "1\n8\n" | nexttrace --fast-trace 2>/dev/null
+# 5. 全国五网ISP路由回程测试（先选1回车，再选8回车）
+echo -e "${BLUE}========================================${PLAIN}"
+echo -e "${BLUE}[5/8] 执行全国五网ISP路由回程测试...${PLAIN}"
+{
+    echo "1"
+    sleep 1
+    echo "8"
+} | nexttrace --fast-trace
 echo ""
 
-echo -e "${BLUE}执行三网回程路由测试...${PLAIN}"
-bash <(curl -Ls --connect-timeout 15 https://netcheck.place) -R 2>/dev/null
+# 6. 三网回程路由测试
+echo -e "${BLUE}========================================${PLAIN}"
+echo -e "${BLUE}[6/8] 执行三网回程路由测试...${PLAIN}"
+bash <(curl -Ls https://netcheck.place) -R
 echo ""
 
-echo -e "${BLUE}执行 bench 性能测试...${PLAIN}"
-wget -qO- --timeout=30 bench.sh 2>/dev/null | bash
+# 7. bench 性能测试
+echo -e "${BLUE}========================================${PLAIN}"
+echo -e "${BLUE}[7/8] 执行 bench 性能测试...${PLAIN}"
+wget -qO- bench.sh | bash
 echo ""
 
-echo -e "${BLUE}执行超售测试...${PLAIN}"
-wget --timeout=30 --no-check-certificate -O memoryCheck.sh https://raw.githubusercontent.com/uselibrary/memoryCheck/main/memoryCheck.sh 2>/dev/null && chmod +x memoryCheck.sh && bash memoryCheck.sh 2>/dev/null
-rm -f memoryCheck.sh 2>/dev/null
+# 8. 超售测试
+echo -e "${BLUE}========================================${PLAIN}"
+echo -e "${BLUE}[8/8] 执行超售测试...${PLAIN}"
+wget --no-check-certificate -O memoryCheck.sh https://raw.githubusercontent.com/uselibrary/memoryCheck/main/memoryCheck.sh && chmod +x memoryCheck.sh && bash memoryCheck.sh
+rm -f memoryCheck.sh
 echo ""
 
 # --------------------------------------------------
