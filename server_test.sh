@@ -1,13 +1,12 @@
 #!/bin/bash
 # ==================================================
-# 服务器测试一键脚本 v6.0
+# 服务器测试一键脚本 v6.1
 # 功能：系统信息、性能测试、BBR、外部测试（全自动）
 # 兼容：Ubuntu/Debian/CentOS/Rocky/AlmaLinux
 # 快捷命令：安装后输入 sn 即可运行
 # ==================================================
 
 set -euo pipefail
-# 允许部分命令失败
 set +e
 
 # 颜色
@@ -17,18 +16,27 @@ BLUE='\033[0;34m'
 RED='\033[0;31m'
 PLAIN='\033[0m'
 
-# 开始计时
 START_TIME=$(date +%s)
 
-# 检查 root
 if [[ $EUID -ne 0 ]]; then
     echo -e "${RED}错误：请使用 root 用户运行此脚本${PLAIN}"
     exit 1
 fi
 
-# --------------------------------------------------
-# 0. 检测系统类型
-# --------------------------------------------------
+# 快捷命令 sn
+create_shortcut() {
+    local SCRIPT_PATH=$(realpath "$0" 2>/dev/null || readlink -f "$0" 2>/dev/null)
+    if [ -f "$SCRIPT_PATH" ]; then
+        if [ ! -f /usr/local/bin/sn ]; then
+            ln -sf "$SCRIPT_PATH" /usr/local/bin/sn
+            echo -e "${GREEN}✓ 快捷命令已创建：输入 'sn' 即可运行本脚本${PLAIN}"
+        fi
+        chmod +x /usr/local/bin/sn 2>/dev/null
+    fi
+}
+create_shortcut
+
+# 检测系统
 detect_os() {
     if [ -f /etc/os-release ]; then
         . /etc/os-release
@@ -49,83 +57,63 @@ detect_os() {
         grep -q "release 7" /etc/redhat-release && PKG_MANAGER="yum" || PKG_MANAGER="dnf"
     else
         PKG_MANAGER="unknown"
-        OS_ID="unknown"
     fi
 }
 detect_os
 echo -e "${GREEN}检测到系统: $OS_ID, 包管理器: $PKG_MANAGER${PLAIN}\n"
 
-# --------------------------------------------------
-# 1. 安装依赖（智能跳过已安装）
-# --------------------------------------------------
+# 安装依赖（智能跳过）
 echo -e "${YELLOW}正在检查并安装依赖包...${PLAIN}\n"
-
-# 定义通用包列表
 COMMON_PKGS="iperf3 mtr sysbench tar curl bc wget git vim net-tools dnsutils ethtool tcpdump nmap htop nmon lsof rsync pciutils usbutils ioping fio zip unzip bzip2 screen tmux jq tree cmake python3 python3-pip speedtest-cli nload iftop"
-# 不同系统的额外包
+
 if [ "$PKG_MANAGER" = "apt" ]; then
-    EXTRA_PKGS="build-essential silversearcher-ag"
-    INSTALL_CMD="apt update -y && apt install -y"
-    CHECK_INSTALLED="dpkg -l"
+    apt update -y
+    for pkg in $COMMON_PKGS build-essential silversearcher-ag; do
+        if dpkg -l | grep -q "^ii  $pkg "; then
+            echo -e "${GREEN}[已安装] $pkg${PLAIN}"
+        else
+            echo -e "${BLUE}[安装] $pkg ...${PLAIN}"
+            apt install -y $pkg
+        fi
+    done
 elif [ "$PKG_MANAGER" = "yum" ]; then
-    EXTRA_PKGS="epel-release gcc gcc-c++ make"
-    INSTALL_CMD="yum install -y"
-    CHECK_INSTALLED="rpm -q"
-    # 启用 EPEL
     if ! rpm -q epel-release &>/dev/null; then
-        echo -e "${BLUE}启用 EPEL 源...${PLAIN}"
         yum install -y epel-release
     fi
+    for pkg in $COMMON_PKGS epel-release gcc gcc-c++ make; do
+        if rpm -q $pkg &>/dev/null; then
+            echo -e "${GREEN}[已安装] $pkg${PLAIN}"
+        else
+            echo -e "${BLUE}[安装] $pkg ...${PLAIN}"
+            yum install -y $pkg
+        fi
+    done
 elif [ "$PKG_MANAGER" = "dnf" ]; then
-    EXTRA_PKGS="epel-release gcc gcc-c++ make"
-    INSTALL_CMD="dnf install -y"
-    CHECK_INSTALLED="rpm -q"
     if ! rpm -q epel-release &>/dev/null; then
-        echo -e "${BLUE}启用 EPEL 源...${PLAIN}"
         dnf install -y epel-release
     fi
+    for pkg in $COMMON_PKGS epel-release gcc gcc-c++ make; do
+        if rpm -q $pkg &>/dev/null; then
+            echo -e "${GREEN}[已安装] $pkg${PLAIN}"
+        else
+            echo -e "${BLUE}[安装] $pkg ...${PLAIN}"
+            dnf install -y $pkg
+        fi
+    done
 else
     echo -e "${RED}不支持的包管理器，跳过依赖安装${PLAIN}"
 fi
 
-# 安装基础包
-if [ -n "$INSTALL_CMD" ]; then
-    echo -e "${BLUE}更新软件源...${PLAIN}"
-    if [ "$PKG_MANAGER" = "apt" ]; then apt update -y; fi
-
-    ALL_PKGS="$COMMON_PKGS $EXTRA_PKGS"
-    for pkg in $ALL_PKGS; do
-        if [ "$PKG_MANAGER" = "apt" ]; then
-            if dpkg -l | grep -q "^ii  $pkg "; then
-                echo -e "${GREEN}[已安装] $pkg${PLAIN}"
-            else
-                echo -e "${BLUE}[安装] $pkg ...${PLAIN}"
-                apt install -y $pkg
-            fi
-        else
-            if rpm -q $pkg &>/dev/null; then
-                echo -e "${GREEN}[已安装] $pkg${PLAIN}"
-            else
-                echo -e "${BLUE}[安装] $pkg ...${PLAIN}"
-                $INSTALL_CMD $pkg
-            fi
-        fi
-    done
-fi
-
 # 安装 nexttrace
 if ! command -v nexttrace &>/dev/null; then
-    echo -e "${BLUE}安装 nexttrace 路由工具...${PLAIN}"
+    echo -e "${BLUE}安装 nexttrace ...${PLAIN}"
     wget -qO /usr/local/bin/nexttrace https://github.com/sjlleo/nexttrace/releases/latest/download/nexttrace_linux_amd64
     chmod +x /usr/local/bin/nexttrace
 fi
 export PATH=$PATH:/usr/local/bin
-
 echo -e "${GREEN}依赖检查完成\n${PLAIN}"
 
-# --------------------------------------------------
-# 2. 设置主机名
-# --------------------------------------------------
+# 设置主机名
 CUR_HOST=$(hostname)
 EXPECT_HOST="www.1373737.xyz"
 if [ "$CUR_HOST" != "$EXPECT_HOST" ]; then
@@ -140,9 +128,7 @@ fi
 HOSTNAME=$(hostname)
 echo ""
 
-# --------------------------------------------------
-# 3. 开启 BBR
-# --------------------------------------------------
+# 开启 BBR
 echo -e "${YELLOW}配置 TCP BBR...${PLAIN}"
 modprobe tcp_bbr 2>/dev/null || true
 echo "tcp_bbr" >> /etc/modules-load.d/bbr.conf 2>/dev/null || true
@@ -151,11 +137,8 @@ grep -q "net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf || echo "net.ipv4
 sysctl -p >/dev/null 2>&1
 echo -e "${GREEN}BBR 已启用 (bbr3)${PLAIN}\n"
 
-# --------------------------------------------------
-# 4. 收集系统信息
-# --------------------------------------------------
+# 收集系统信息
 echo -e "${YELLOW}收集系统信息...${PLAIN}\n"
-
 OS_VERSION=$(grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '"')
 KERNEL_VER=$(uname -r)
 ARCH=$(uname -m)
@@ -236,9 +219,7 @@ if command -v systemd-detect-virt &>/dev/null; then
     esac
 fi
 
-# --------------------------------------------------
-# 5. 性能基准测试
-# --------------------------------------------------
+# 性能测试
 echo -e "${BLUE}CPU 单核测试 (10秒)...${PLAIN}"
 SINGLE_SCORE=$(sysbench cpu --cpu-max-prime=20000 --threads=1 --time=10 run 2>&1 | grep -E "events per second:" | awk '{print $4}')
 [ -z "$SINGLE_SCORE" ] && SINGLE_SCORE=0
@@ -259,11 +240,8 @@ MEM_WRITE=$(sysbench memory --memory-block-size=1M --memory-total-size=5G --memo
 [ -z "$MEM_WRITE" ] && MEM_WRITE=0
 echo -e "${GREEN}内存写: $MEM_WRITE MB/s${PLAIN}"
 
-# --------------------------------------------------
-# 6. 硬盘 I/O 测试 (3次)
-# --------------------------------------------------
+# 硬盘 I/O 测试
 echo -e "${BLUE}硬盘 I/O 测试...${PLAIN}"
-# 判断类型
 rootdev=$(df / | tail -1 | cut -d' ' -f1)
 devname=$(lsblk -no pkname $rootdev | head -1)
 if [ -f /sys/block/$devname/queue/rotational ]; then
@@ -302,9 +280,7 @@ else
     LEVEL="优秀"
 fi
 
-# --------------------------------------------------
-# 7. 输出系统信息
-# --------------------------------------------------
+# 输出系统信息
 echo ""
 echo -e "${YELLOW}系统信息查询${PLAIN}"
 echo "============================="
@@ -347,45 +323,37 @@ echo "系统运行时长： $UPTIME_STR"
 echo ""
 echo -e "${YELLOW}硬盘 I/O 性能测试${PLAIN}"
 echo "硬盘性能测试结果如下："
-echo -e "硬盘I/O（第一次测试）： $YELLOW${IO_SPEEDS[0]} MB/s$PLAIN"
-echo -e "硬盘I/O（第二次测试）： $YELLOW${IO_SPEEDS[1]} MB/s$PLAIN"
-echo -e "硬盘I/O（第三次测试）： $YELLOW${IO_SPEEDS[2]} MB/s$PLAIN"
-echo -e "硬盘I/O（平均测试）：  $YELLOW$AVG_SPEED MB/s$PLAIN"
+echo -e "硬盘I/O（第一次测试）： ${YELLOW}${IO_SPEEDS[0]} MB/s${PLAIN}"
+echo -e "硬盘I/O（第二次测试）： ${YELLOW}${IO_SPEEDS[1]} MB/s${PLAIN}"
+echo -e "硬盘I/O（第三次测试）： ${YELLOW}${IO_SPEEDS[2]} MB/s${PLAIN}"
+echo -e "硬盘I/O（平均测试）：  ${YELLOW}$AVG_SPEED MB/s${PLAIN}"
 echo "硬盘类型： $DISK_TYPE"
 echo "硬盘性能等级： $LEVEL"
-echo -e "${GREEN}测试数据不是百分百准确，以官方宣称为主。$PLAIN"
+echo -e "${GREEN}测试数据不是百分百准确，以官方宣称为主。${PLAIN}"
 echo ""
 
-# --------------------------------------------------
-# 8. 执行外部测试脚本（全自动交互）
-# --------------------------------------------------
-
-# 1) IP 风险检查
+# 外部测试（关键修复：使用正确 URL）
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[1/8] 执行 IP 风险检查...${PLAIN}"
-bash <(curl -L https://ipcheck.place)
+bash <(curl -Ls https://IP.Check.Place)
 echo -e "${GREEN}完成${PLAIN}\n"
 
-# 2) 三网回程线路测试
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[2/8] 执行三网回程线路测试...${PLAIN}"
 curl -sSf https://raw.githubusercontent.com/zhanghanyun/backtrace/main/install.sh | sh
 curl -s https://raw.githubusercontent.com/anjing-liu/mtr_trace/main/mtr_trace.sh | bash
 echo -e "${GREEN}完成${PLAIN}\n"
 
-# 3) 三网+教育网 IPv4 单线程测速 (自动选择 2)
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[3/8] 执行三网+教育网 IPv4 单线程测速...${PLAIN}"
 echo "2" | bash <(curl -sL https://raw.githubusercontent.com/i-abc/Speedtest/main/speedtest.sh)
 echo -e "${GREEN}完成${PLAIN}\n"
 
-# 4) 流媒体解锁测试 (自动输入 66 回车)
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[4/8] 执行流媒体解锁测试...${PLAIN}"
-printf "66\n" | bash <(curl -L https://check.unlock.media)
+printf "66\n" | bash <(curl -Ls https://check.unlock.media)
 echo -e "${GREEN}完成${PLAIN}\n"
 
-# 5) 全国五网ISP路由回程测试 (自动选择 1 然后 8)
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[5/8] 执行全国五网ISP路由回程测试...${PLAIN}"
 {
@@ -395,19 +363,16 @@ echo -e "${BLUE}[5/8] 执行全国五网ISP路由回程测试...${PLAIN}"
 } | nexttrace --fast-trace
 echo -e "${GREEN}完成${PLAIN}\n"
 
-# 6) 三网回程路由测试 (自动输入 y 确认依赖)
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[6/8] 执行三网回程路由测试...${PLAIN}"
-printf "y\n" | bash <(curl -L https://netcheck.place) -R
+printf "y\n" | bash <(curl -Ls https://Net.Check.Place) -R
 echo -e "${GREEN}完成${PLAIN}\n"
 
-# 7) bench 性能测试
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[7/8] 执行 bench 性能测试...${PLAIN}"
 wget -qO- bench.sh | bash
 echo -e "${GREEN}完成${PLAIN}\n"
 
-# 8) 超售测试
 echo -e "${BLUE}========================================${PLAIN}"
 echo -e "${BLUE}[8/8] 执行超售测试...${PLAIN}"
 wget --no-check-certificate -O memoryCheck.sh https://raw.githubusercontent.com/uselibrary/memoryCheck/main/memoryCheck.sh
@@ -416,9 +381,7 @@ chmod +x memoryCheck.sh
 rm -f memoryCheck.sh
 echo -e "${GREEN}完成${PLAIN}\n"
 
-# --------------------------------------------------
-# 9. 总耗时
-# --------------------------------------------------
+# 总耗时
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
 HOURS_ELAPSED=$((ELAPSED / 3600))
